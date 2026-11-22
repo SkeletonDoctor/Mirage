@@ -13,11 +13,21 @@ A native macOS app for generating images and video on your own Mac with MLX. Not
 - **Hugging Face browser:** live search of MLX image and video models, per-file selection, pause and resume, and a choice of where models are stored.
 - **Liquid Glass interface:** top toolbar, queue, gallery with search and favourites, prompt history, style presets and a full-window viewer.
 
+## Install
+
+Download the latest `Mirage-x.y.dmg` from [Releases](https://github.com/SkeletonDoctor/Mirage/releases), open it and drag Mirage to Applications.
+
+The app is not notarized by Apple, so the first time you open it macOS will refuse. To allow it:
+
+1. Try to open Mirage once and dismiss the warning.
+2. Open **System Settings → Privacy & Security**, scroll to the Security section and click **Open Anyway** next to Mirage.
+3. Confirm with your password or Touch ID. After that it opens normally.
+
 ## Requirements
 
 - Apple Silicon Mac
 - macOS 26 or later
-- Xcode 26 or later (Swift 6.2) to build
+- Xcode 26 or later (Swift 6.2), only if you build it yourself
 
 ## Build
 
@@ -25,9 +35,7 @@ A native macOS app for generating images and video on your own Mac with MLX. Not
 Scripts/build.sh --install
 ```
 
-This builds `build/Mirage.app`, copies it to `/Applications` and opens it. Use `Scripts/build.sh --open` to run it without installing.
-
-The app is signed ad hoc, not notarized, so another Mac will ask you to allow it under System Settings → Privacy & Security.
+This builds `build/Mirage.app`, copies it to `/Applications` and opens it. Use `Scripts/build.sh --open` to run it without installing, or `Scripts/make_dmg.sh` to package a DMG.
 
 ## How it works
 
