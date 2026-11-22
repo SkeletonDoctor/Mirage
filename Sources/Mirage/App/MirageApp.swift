@@ -242,7 +242,18 @@ final class AppState {
         return GalleryItem(file: path, kind: .image, params: p, date: Date(), seconds: 0, peakMemoryGB: 0)
     }
 
+    /// True when the previous launch died within seconds of starting. The app then opens without
+    /// putting the newest result on screen, so one unshowable file can never lock you out.
+    private(set) var safeLaunch = false
+
     func bootstrap() async {
+        let defaults = UserDefaults.standard
+        safeLaunch = defaults.bool(forKey: "launchInProgress")
+        defaults.set(true, forKey: "launchInProgress")
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            defaults.set(false, forKey: "launchInProgress")
+        }
         MemoryMonitor.shared.start()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { JobQueue.shared.cancelAll() }

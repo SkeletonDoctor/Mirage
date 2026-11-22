@@ -516,7 +516,7 @@ struct CanvasView: View {
     }
     private var showingJob: Bool { queue.current != nil && app.shownItemID == nil }
     private var visibleItem: GalleryItem? {
-        showingJob ? nil : (shownItem ?? (failedJob == nil ? gallery.items.first : nil))
+        showingJob ? nil : (shownItem ?? (failedJob == nil && !app.safeLaunch ? gallery.items.first : nil))
     }
     /// Identity of what the stage shows, so changes cross-fade.
     private var stageKey: String {
@@ -1133,6 +1133,7 @@ struct MediaView: View {
         Group {
             if item.kind == .video {
                 LoopingVideo(url: item.url).id(item.id)
+                    .aspectRatio(CGFloat(max(item.params.width, 1)) / CGFloat(max(item.params.height, 1)), contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .shadow(color: .black.opacity(0.4), radius: 26, y: 10)
             } else if let image {
@@ -1158,25 +1159,50 @@ struct MediaView: View {
     }
 }
 
-struct LoopingVideo: View {
+/// Plays a video on a loop. Uses AppKit's `AVPlayerView` directly: SwiftUI's own `VideoPlayer`
+/// crashes at launch in a package-built app (its class metadata fails to load).
+struct LoopingVideo: NSViewRepresentable {
     let url: URL
-    @State private var player: AVQueuePlayer?
-    @State private var looper: AVPlayerLooper?
     @Environment(\.controlActiveState) private var controlState
 
-    var body: some View {
-        VideoPlayer(player: player)
-            .aspectRatio(contentMode: .fit)
-            .onAppear {
-                let item = AVPlayerItem(url: url)
-                let queue = AVQueuePlayer()
-                looper = AVPlayerLooper(player: queue, templateItem: item)
-                player = queue
-                queue.play()
-            }
-            .onDisappear { player?.pause(); player = nil; looper = nil }
-            .onChange(of: controlState) { _, state in
-                if state == .inactive { player?.pause() } else { player?.play() }
-            }
+    final class Coordinator {
+        var player: AVQueuePlayer?
+        var looper: AVPlayerLooper?
+        var url: URL?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        view.showsFullScreenToggleButton = true
+        load(url, into: view, coordinator: context.coordinator)
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if context.coordinator.url != url { load(url, into: view, coordinator: context.coordinator) }
+        // Stop decoding frames while the window is in the background.
+        if controlState == .inactive { context.coordinator.player?.pause() }
+        else if context.coordinator.player?.rate == 0 { context.coordinator.player?.play() }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: Coordinator) {
+        coordinator.player?.pause()
+        view.player = nil
+        coordinator.looper = nil
+        coordinator.player = nil
+    }
+
+    private func load(_ url: URL, into view: AVPlayerView, coordinator: Coordinator) {
+        coordinator.player?.pause()
+        let queue = AVQueuePlayer()
+        coordinator.looper = AVPlayerLooper(player: queue, templateItem: AVPlayerItem(url: url))
+        coordinator.player = queue
+        coordinator.url = url
+        view.player = queue
+        queue.play()
     }
 }

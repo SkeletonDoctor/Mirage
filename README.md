@@ -61,7 +61,7 @@ swift build
 
 ## Status
 
-Developed and tested on an M5 with 16 GB. Image generation, editing and 2× upscaling have been run end to end. The video engines are wired up and their command lines are checked, but no video has been generated end to end yet.
+Developed and tested on an M5 with 16 GB. Image generation, editing, 2× upscaling and LTX-2.5 video with sound (1024 × 576, 4.7 s, about six minutes) have been run end to end. Wan video is wired up and its command line is checked, but has not been run end to end yet.
 
 ## Licence
 
