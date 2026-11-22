@@ -102,12 +102,17 @@ struct ChatView: View {
     @State private var models = ModelStore.shared
     @State private var controller = ChatController.shared
     @State private var settings = AppSettings.shared
-    @State private var showBrowser = false
     @FocusState private var inputFocused: Bool
+
+    /// Chat models are managed under Models › Chat.
+    private func openChatModels() {
+        app.modelsTab = .chat
+        app.section = .models
+    }
 
     var body: some View {
         HStack(spacing: 14) {
-            ChatSidebar(showBrowser: $showBrowser)
+            ChatSidebar(openModels: openChatModels)
                 .frame(width: 284)
                 .glassPanel()
             conversation
@@ -115,7 +120,6 @@ struct ChatView: View {
         }
         .padding(14)
         .navigationTitle("Mirage")
-        .sheet(isPresented: $showBrowser) { ChatModelBrowser() }
         .onAppear { inputFocused = true }
     }
 
@@ -127,7 +131,7 @@ struct ChatView: View {
                 Text("Chat with an unlocked model").font(.title2.weight(.semibold))
                 Text("This tab lists only language models whose makers removed the built-in refusals (often labelled abliterated or uncensored). They run entirely on this Mac; nothing you type leaves it.")
                     .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 440)
-                Button("Get a Chat Model", systemImage: "arrow.down.circle") { showBrowser = true }
+                Button("Get a Chat Model", systemImage: "arrow.down.circle") { openChatModels() }
                     .buttonStyle(.miragePrimaryLarge)
             }
             .padding(40)
@@ -178,7 +182,7 @@ struct ChatView: View {
 // MARK: - Sidebar
 
 struct ChatSidebar: View {
-    @Binding var showBrowser: Bool
+    let openModels: () -> Void
     @State private var store = ChatStore.shared
     @State private var engine = ChatEngine.shared
     @State private var models = ModelStore.shared
@@ -281,8 +285,8 @@ struct ChatSidebar: View {
                 }
                 .animation(.snappy(duration: 0.2), value: engine.state)
             }
-            Button("Get Chat Models", systemImage: "arrow.down.circle") { showBrowser = true }
-                .buttonStyle(.softSmall)
+            Button("Manage Chat Models", systemImage: "shippingbox") { openModels() }
+                .buttonStyle(.softSmall).help("Download or remove chat models under Models › Chat")
         }
     }
 
@@ -516,57 +520,6 @@ final class ChatModelSearch {
     func size(for repo: String) async {
         guard sizes[repo] == nil, let detail = try? await HFClient.detail(repo) else { return }
         sizes[repo] = (detail.siblings ?? []).filter { $0.rfilename.hasSuffix(".safetensors") }.reduce(0) { $0 + $1.bytes }
-    }
-}
-
-struct ChatModelBrowser: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var search = ChatModelSearch()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Unlocked chat models").font(.title3.weight(.semibold))
-                    Spacer()
-                    Button("Done") { dismiss() }.buttonStyle(.soft).keyboardShortcut(.cancelAction)
-                }
-                Text("Live from Hugging Face: MLX language models labelled abliterated, uncensored or similar. Only these appear in the Chat tab. Sizes and fit are for this \(SystemInfo.current.chip) with \(Format.gb(SystemInfo.current.totalGB)).")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search, for example qwen or gemma", text: $search.query).textFieldStyle(.plain)
-                        if search.loading { ProgressView().controlSize(.small) }
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 7)
-                    .background(.primary.opacity(0.07), in: Capsule())
-                    Picker("Sort", selection: $search.sort) {
-                        ForEach(HFSort.allCases) { Text($0.title).tag($0) }
-                    }
-                    .labelsHidden().fixedSize()
-                }
-                .padding(.top, 4)
-            }
-            .padding(18)
-            Divider()
-            if let error = search.error, search.results.isEmpty {
-                ContentUnavailableView("Could not load models", systemImage: "wifi.exclamationmark", description: Text(error))
-            } else if search.results.isEmpty && !search.loading {
-                ContentUnavailableView("No matching models", systemImage: "magnifyingglass", description: Text("Try a different search."))
-            } else {
-                List(search.results) { model in
-                    ChatModelRow(model: model, search: search)
-                }
-                .listStyle(.inset)
-            }
-        }
-        .frame(width: 720, height: 620)
-        .task(id: "\(search.query)|\(search.sort.rawValue)") {
-            try? await Task.sleep(nanoseconds: search.query.isEmpty ? 0 : 400_000_000)
-            if Task.isCancelled { return }
-            await search.load()
-        }
     }
 }
 

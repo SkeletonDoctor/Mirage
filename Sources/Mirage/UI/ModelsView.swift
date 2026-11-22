@@ -1,30 +1,36 @@
 import SwiftUI
 
 enum ModelsTab: String, CaseIterable, Identifiable {
-    case recommended = "Recommended", huggingFace = "Hugging Face", installed = "Installed"
+    case recommended = "Recommended", huggingFace = "Hugging Face", chat = "Chat", installed = "Installed"
     var id: String { rawValue }
 }
 
 struct ModelsView: View {
     @Environment(AppState.self) private var app
-    @State private var tab: ModelsTab = .recommended
     @State private var kind: MediaKind?
 
     var body: some View {
+        @Bindable var app = app
+        let tab = app.modelsTab
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 SlidingSegments(items: [.init(value: ModelsTab.recommended, title: "Recommended", symbol: "star"),
                                         .init(value: ModelsTab.huggingFace, title: "Hugging Face", symbol: "globe"),
+                                        .init(value: ModelsTab.chat, title: "Chat", symbol: "bubble.left.and.bubble.right"),
                                         .init(value: ModelsTab.installed, title: "Installed", symbol: "internaldrive")],
-                                selection: $tab)
+                                selection: $app.modelsTab)
                 Spacer()
-                KindFilter(kind: $kind)
+                // The image and video filter does not apply to chat models.
+                if tab != .chat {
+                    KindFilter(kind: $kind).transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
             }
             .padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 6)
             Group {
                 switch tab {
                 case .recommended: RecommendedView(kind: kind)
                 case .huggingFace: HuggingFaceView(kind: kind)
+                case .chat: ChatModelsView()
                 case .installed: InstalledView(kind: kind)
                 }
             }
@@ -442,49 +448,27 @@ struct InstalledView: View {
     @Environment(AppState.self) private var app
     let kind: MediaKind?
     @State private var store = ModelStore.shared
-    @State private var settings = AppSettings.shared
-    @State private var pendingDelete: InstalledModel?
 
     var body: some View {
-        let models = store.models.filter { kind == nil || $0.kind == kind }
+        // Image and video models (and the upscaler) follow the kind filter; chat models have their own group.
+        let media = store.models.filter { !$0.profile.isChat && (kind == nil || $0.kind == kind) }
+        let chat = kind == nil ? store.chatModels : []
         Group {
-            if models.isEmpty {
+            if media.isEmpty && chat.isEmpty {
                 ContentUnavailableView("Nothing installed", systemImage: "shippingbox",
                                        description: Text("Models you download appear here. Compatible models already in your Hugging Face cache are picked up too."))
             } else {
-                List(models) { model in
-                    let plan = MemoryPlanner.plan(footprint: model.footprint, profile: model.profile, width: model.profile.defaultWidth,
-                                                  height: model.profile.defaultHeight, frames: model.kind == .video ? 49 : 1,
-                                                  auto: true, memoryLimitGB: settings.memoryLimitGB)
-                    HStack(spacing: 12) {
-                        Image(systemName: model.kind.symbol).font(.title3).frame(width: 30)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(model.title).fontWeight(.medium)
-                            HStack(spacing: 5) {
-                                Text(model.repo).font(.caption).foregroundStyle(.secondary)
-                                Tag(text: model.profile.label)
-                                if let q = model.quantLabel { Tag(text: q) }
-                            }
+                List {
+                    if !media.isEmpty {
+                        Section("Images and video") {
+                            ForEach(media) { InstalledRow(model: $0).listRowBackground(Color.clear) }
                         }
-                        Spacer()
-                        FitBadge(fit: model.profile.isChat
-                                 ? MemoryPlanner.chatFit(residentGB: model.footprint.residentGB, memoryLimitGB: settings.memoryLimitGB)
-                                 : plan.fit, compact: true)
-                        Text(Format.bytes(model.sizeBytes)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
-                            .frame(width: 70, alignment: .trailing)
-                        if !model.profile.isTool {
-                            Button(model.profile.isChat ? "Chat" : "Use") { app.use(model) }.buttonStyle(.miragePrimary)
-                        }
-                        Menu {
-                            Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([model.snapshot]) }
-                            Button("Open on Hugging Face", systemImage: "safari") { NSWorkspace.shared.open(HFClient.pageURL(model.repo)) }
-                            Divider()
-                            Button("Delete…", systemImage: "trash", role: .destructive) { pendingDelete = model }
-                        } label: { Image(systemName: "ellipsis.circle") }
-                        .menuStyle(.borderlessButton).fixedSize()
                     }
-                    .padding(.vertical, 4)
-                    .listRowBackground(Color.clear)
+                    if !chat.isEmpty {
+                        Section("Chat") {
+                            ForEach(chat) { InstalledRow(model: $0).listRowBackground(Color.clear) }
+                        }
+                    }
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
@@ -493,13 +477,127 @@ struct InstalledView: View {
             }
         }
         .task { await store.refresh() }
-        .confirmationDialog("Delete \(pendingDelete?.title ?? "model")?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
+    }
+}
+
+/// One installed model: what it is, whether it fits, and the actions on it.
+struct InstalledRow: View {
+    @Environment(AppState.self) private var app
+    let model: InstalledModel
+    @State private var store = ModelStore.shared
+    @State private var settings = AppSettings.shared
+    @State private var confirmDelete = false
+
+    var body: some View {
+        let fit: FitLevel = model.profile.isChat
+            ? MemoryPlanner.chatFit(residentGB: model.footprint.residentGB, memoryLimitGB: settings.memoryLimitGB)
+            : MemoryPlanner.plan(footprint: model.footprint, profile: model.profile, width: model.profile.defaultWidth,
+                                 height: model.profile.defaultHeight, frames: model.kind == .video ? 49 : 1,
+                                 auto: true, memoryLimitGB: settings.memoryLimitGB).fit
+        HStack(spacing: 12) {
+            Image(systemName: model.profile.isChat ? "bubble.left.and.bubble.right" : model.profile.isTool ? "arrow.up.left.and.arrow.down.right" : model.kind.symbol)
+                .font(.title3).frame(width: 30)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.title).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 5) {
+                    Text(model.repo).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    Tag(text: model.profile.label)
+                    if let q = model.quantLabel { Tag(text: q) }
+                }
+            }
+            Spacer()
+            FitBadge(fit: fit, compact: true)
+            Text(Format.bytes(model.sizeBytes)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                .frame(width: 70, alignment: .trailing)
+            if !model.profile.isTool {
+                Button(model.profile.isChat ? "Chat" : "Use") { app.use(model) }.buttonStyle(.miragePrimary)
+            }
+            Menu {
+                Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([model.snapshot]) }
+                Button("Open on Hugging Face", systemImage: "safari") { NSWorkspace.shared.open(HFClient.pageURL(model.repo)) }
+                Divider()
+                Button("Delete…", systemImage: "trash", role: .destructive) { confirmDelete = true }
+            } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).fixedSize()
+        }
+        .padding(.vertical, 4)
+        .confirmationDialog("Delete \(model.title)?", isPresented: $confirmDelete) {
             Button("Move to Trash", role: .destructive) {
-                if let m = pendingDelete { Task { await store.delete(m) } }
-                pendingDelete = nil
+                if model.repo == ChatEngine.shared.loadedRepo { ChatEngine.shared.unload(reason: nil) }
+                Task { await store.delete(model) }
             }
         } message: {
-            Text("Its \(Format.bytes(pendingDelete?.sizeBytes ?? 0)) of files move to the Trash. You can download it again later.")
+            Text("Its \(Format.bytes(model.sizeBytes)) of files move to the Trash. You can download it again later.")
         }
+    }
+}
+
+// MARK: - Chat models
+
+/// The Chat section of Models: installed chat models first, then unlocked ones to download.
+struct ChatModelsView: View {
+    @State private var search = ChatModelSearch()
+    @State private var store = ModelStore.shared
+
+    var body: some View {
+        let installed = store.chatModels
+        let installedIDs = Set(installed.map(\.repo))
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search unlocked chat models, for example qwen or gemma", text: $search.query).textFieldStyle(.plain)
+                    if search.loading { ProgressView().controlSize(.small) }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .glassEffect(.regular, in: Capsule())
+                Picker("Sort", selection: $search.sort) {
+                    ForEach(HFSort.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden().fixedSize()
+                Button { Task { await search.load() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(IconButtonStyle(size: 28)).help("Refresh from Hugging Face")
+            }
+            .padding(.horizontal, 18).padding(.vertical, 8)
+
+            if let error = search.error, search.results.isEmpty, installed.isEmpty {
+                ContentUnavailableView {
+                    Label("Could not load models", systemImage: "wifi.exclamationmark")
+                } description: { Text(error) } actions: {
+                    Button("Try Again") { Task { await search.load() } }.buttonStyle(.soft)
+                }
+            } else {
+                List {
+                    if !installed.isEmpty {
+                        Section("Installed") {
+                            ForEach(installed) { InstalledRow(model: $0).listRowBackground(Color.clear) }
+                        }
+                    }
+                    Section {
+                        ForEach(search.results.filter { !installedIDs.contains($0.id) }) { model in
+                            ChatModelRow(model: model, search: search).listRowBackground(Color.clear)
+                        }
+                        if search.results.isEmpty && !search.loading {
+                            Text("No matching models. Try a different search.").foregroundStyle(.secondary)
+                                .listRowBackground(Color.clear)
+                        }
+                    } header: {
+                        Text("Unlocked models on Hugging Face")
+                    } footer: {
+                        Text("Only MLX language models labelled abliterated, uncensored or similar are listed. Sizes and fit are for this \(SystemInfo.current.chip) with \(Format.gb(SystemInfo.current.totalGB)).")
+                    }
+                }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .glassPanel(cornerRadius: 22)
+                .padding(.horizontal, 18).padding(.bottom, 16)
+            }
+        }
+        .task(id: "\(search.query)|\(search.sort.rawValue)") {
+            try? await Task.sleep(nanoseconds: search.query.isEmpty ? 0 : 400_000_000)
+            if Task.isCancelled { return }
+            await search.load()
+        }
+        .task { await store.refresh() }
     }
 }

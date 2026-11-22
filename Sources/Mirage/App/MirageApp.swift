@@ -224,6 +224,8 @@ final class AppState {
     var shownItemID: UUID?
     var kindFilter: MediaKind?
     var showDownloads = false
+    /// Which part of the Models screen is showing.
+    var modelsTab: ModelsTab = .recommended
     /// Image shown in the full-window viewer.
     var lightbox: GalleryItem?
     /// The toolbar's Upscale panel, and the image it should open with (nil lets the user pick one).
