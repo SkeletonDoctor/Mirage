@@ -198,6 +198,40 @@ enum HFClient {
         }
     }
 
+    /// Searches MLX language models whose names mark them as unlocked (abliterated, uncensored and so on).
+    static func searchUnlockedChat(query: String, sort: HFSort, limit: Int = 30) async throws -> [HFModel] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let markers = ["abliterated", "uncensored", "heretic", "dolphin", "josiefied", "unlocked"]
+        let queries: [[URLQueryItem]] = markers.map { marker in
+            [URLQueryItem(name: "search", value: q.isEmpty ? marker : "\(q) \(marker)"),
+             URLQueryItem(name: "filter", value: "mlx"),
+             URLQueryItem(name: "pipeline_tag", value: "text-generation"),
+             URLQueryItem(name: "sort", value: sort.rawValue), URLQueryItem(name: "direction", value: "-1"),
+             URLQueryItem(name: "limit", value: "\(limit)")]
+        }
+        var merged: [String: HFModel] = [:]
+        var firstError: Error?
+        await withTaskGroup(of: Result<[HFModel], Error>.self) { group in
+            for query in queries {
+                group.addTask { do { return .success(try await list(query)) } catch { return .failure(error) } }
+            }
+            for await result in group {
+                switch result {
+                case .success(let models): for m in models where m.profile.isChat { merged[m.id] = m }
+                case .failure(let e): if firstError == nil { firstError = e }
+                }
+            }
+        }
+        if merged.isEmpty, let firstError { throw firstError }
+        let all = Array(merged.values)
+        switch sort {
+        case .trending: return all.sorted { ($0.trendingScore ?? 0, $0.downloads ?? 0) > ($1.trendingScore ?? 0, $1.downloads ?? 0) }
+        case .downloads: return all.sorted { ($0.downloads ?? 0) > ($1.downloads ?? 0) }
+        case .likes: return all.sorted { ($0.likes ?? 0) > ($1.likes ?? 0) }
+        case .updated: return all.sorted { ($0.lastModified ?? "") > ($1.lastModified ?? "") }
+        }
+    }
+
     /// Full repo details including every file's size and content hash.
     static func detail(_ repo: String) async throws -> HFModel {
         let escaped = repo.split(separator: "/").map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }.joined(separator: "/")

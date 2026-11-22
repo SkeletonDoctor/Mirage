@@ -79,6 +79,14 @@ enum MemoryProbe {
         return usage.xsu_used
     }
 
+    /// Footprint of a process plus its direct children (for a job started through a small launcher).
+    static func footprintWithChildren(pid: pid_t) -> UInt64 {
+        var pids = [pid_t](repeating: 0, count: 32)
+        let bytes = proc_listchildpids(pid, &pids, Int32(MemoryLayout<pid_t>.size * pids.count))
+        let count = max(0, Int(bytes) / MemoryLayout<pid_t>.size)
+        return pids.prefix(count).filter { $0 > 0 }.reduce(footprint(pid: pid)) { $0 + footprint(pid: $1) }
+    }
+
     /// Physical footprint of another process (what Activity Monitor calls "Memory").
     static func footprint(pid: pid_t) -> UInt64 {
         var info = rusage_info_v4()
@@ -143,6 +151,10 @@ final class MemoryMonitor {
                 else { self.pressure = .normal }
                 // Under pressure, give back what the app can: its decoded images and thumbnails.
                 if self.pressure != .normal { ThumbnailCache.shared.purge(); ImageLoader.shared.purge() }
+                // An idle chat model is the biggest thing the app can give back.
+                if self.pressure == .critical, !ChatEngine.shared.isReplying {
+                    ChatEngine.shared.unload(reason: "Unloaded because memory ran critically low. It reloads when you send a message.")
+                }
             }
         }
         src.resume()

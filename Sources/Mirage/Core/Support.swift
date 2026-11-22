@@ -80,6 +80,10 @@ final class AppSettings {
     /// Folder for downloaded models. Empty means the standard Hugging Face cache.
     var modelsPath: String { didSet { d.set(modelsPath, forKey: "modelsPath") } }
     var lastModelRepo: String { didSet { d.set(lastModelRepo, forKey: "lastModelRepo") } }
+    var lastChatRepo: String { didSet { d.set(lastChatRepo, forKey: "lastChatRepo") } }
+    var chatTemperature: Double { didSet { d.set(chatTemperature, forKey: "chatTemperature") } }
+    var chatMaxTokens: Double { didSet { d.set(chatMaxTokens, forKey: "chatMaxTokens") } }
+    var chatSystemPrompt: String { didSet { d.set(chatSystemPrompt, forKey: "chatSystemPrompt") } }
     // Upscaler choices. 0 means "choose for me" for precision and tile size.
     var upscaleScale: Double { didSet { d.set(upscaleScale, forKey: "upscaleScale") } }
     var upscaleSoftness: Double { didSet { d.set(upscaleSoftness, forKey: "upscaleSoftness") } }
@@ -106,6 +110,10 @@ final class AppSettings {
         videoPath = d.string(forKey: "videoPath") ?? legacy ?? Paths.defaultVideoDir.path
         modelsPath = d.string(forKey: "modelsPath") ?? ""
         lastModelRepo = d.string(forKey: "lastModelRepo") ?? ""
+        lastChatRepo = d.string(forKey: "lastChatRepo") ?? ""
+        chatTemperature = d.object(forKey: "chatTemperature") as? Double ?? 0.7
+        chatMaxTokens = d.object(forKey: "chatMaxTokens") as? Double ?? 1024
+        chatSystemPrompt = d.string(forKey: "chatSystemPrompt") ?? ""
         recentPrompts = d.stringArray(forKey: "recentPrompts") ?? []
         upscaleScale = d.object(forKey: "upscaleScale") as? Double ?? 2
         upscaleSoftness = d.double(forKey: "upscaleSoftness")

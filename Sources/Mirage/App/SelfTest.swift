@@ -20,6 +20,29 @@ enum SelfTest {
         case "download": return await download(args.count > 1 ? args[1] : "")
         case "generate": return await generate(Array(args.dropFirst()))
         case "engines": return await engines(Array(args.dropFirst()))
+        case "chat":
+            guard args.count > 2 else { print("chat <repo> <message>"); return 2 }
+            await EngineManager.shared.refresh()
+            await ModelStore.shared.refresh()
+            guard let model = ModelStore.shared.model(args[1]) else { print("chat model not installed: \(args[1])"); return 1 }
+            print("model: \(model.title) · chat \(model.profile.isChat) · needs \(Format.gb(model.footprint.residentGB))")
+            let started = Date()
+            guard await ChatEngine.shared.load(model) else { print("load failed: \(ChatEngine.shared.state)\n\(ChatEngine.shared.log.suffix(1500))"); return 1 }
+            print("loaded in \(Format.duration(Date().timeIntervalSince(started)))")
+            var reply = "", thinking = ""
+            let t0 = Date()
+            do {
+                for try await piece in ChatEngine.shared.reply(to: [ChatMessage(role: "user", text: args[2])], system: "",
+                                                                 temperature: 0.7, maxTokens: 200) {
+                    reply += piece.text; thinking += piece.thinking
+                }
+            } catch { print("stream error: \(error.localizedDescription)") }
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            print("reply (\(Format.duration(Date().timeIntervalSince(t0)))): \(reply.prefix(600))")
+            if !thinking.isEmpty { print("thinking field: \(thinking.prefix(200))") }
+            print("memory while loaded: \(Format.gb(ChatEngine.shared.memoryGB))")
+            ChatEngine.shared.unload(reason: nil)
+            return reply.isEmpty ? 1 : 0
         case "relocate":
             await ModelStore.shared.refresh()
             let target = args.count > 1 && args[1] != "default" ? URL(fileURLWithPath: args[1], isDirectory: true) : Paths.defaultHFHub

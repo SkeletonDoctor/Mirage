@@ -20,6 +20,8 @@ struct EngineSpec {
                     "ltx-pipelines-mlx @ git+https://github.com/dgrauet/ltx-2-mlx.git#subdirectory=packages/ltx-pipelines-mlx",
                     "imageio-ffmpeg",
                    ], versionPackage: "ltx-pipelines-mlx", probeBinary: "ltx-2-mlx"),
+        EngineSpec(id: .mlxLM, title: "mlx-lm", summary: "Chat with local language models.",
+                   packages: ["mlx-lm"], versionPackage: "mlx-lm", probeBinary: "mlx_lm.server"),
         EngineSpec(id: .mlxVideo, title: "mlx-video", summary: "Wan 2.1 / 2.2 video, and LTX in mlx-video format.",
                    packages: ["git+https://github.com/Blaizzy/mlx-video.git", "imageio-ffmpeg"],
                    versionPackage: "mlx-video", probeBinary: "mlx_video.wan_2.generate"),

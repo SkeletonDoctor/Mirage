@@ -8,6 +8,7 @@ A native macOS app for generating images and video on your own Mac with MLX. Not
 
 - **Images:** text to image, image to image and instruction-based editing with FLUX, Z-Image, Qwen Image, Krea and other models supported by [mflux](https://github.com/filipstrand/mflux).
 - **Video:** LTX-2.3 / LTX-2.5 through [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx) and Wan 2.x through [mlx-video](https://github.com/Blaizzy/mlx-video), from text, an image or an audio track.
+- **Chat:** talk to local language models in a Chat tab. It lists only unlocked models (those labelled abliterated or uncensored on Hugging Face), keeps one loaded between messages and frees it when idle or when a generation needs the memory.
 - **Upscaling:** enlarge any image up to 4× with the optional SeedVR2 upscaler, with adjustable scale, softness, precision and tile size.
 - **Fits the Mac it runs on:** reads the machine's memory, recommends the model variant that fits (4-bit on small Macs, full precision on large ones), switches on low-memory modes automatically and shows what each generation will need before it starts. Every limit can be raised by hand.
 - **Hugging Face browser:** live search of MLX image and video models, per-file selection, pause and resume, and a choice of where models are stored.
@@ -39,13 +40,14 @@ This builds `build/Mirage.app`, copies it to `/Applications` and opens it. Use `
 
 ## How it works
 
-Mirage is a SwiftUI front end. The model work is done by three Python engines, each installed on demand into its own private environment under `~/Library/Application Support/Mirage/engines` using [uv](https://github.com/astral-sh/uv) (downloaded automatically if it is missing). Models are kept in the standard Hugging Face cache unless you choose another folder.
+Mirage is a SwiftUI front end. The model work is done by four Python engines, each installed on demand into its own private environment under `~/Library/Application Support/Mirage/engines` using [uv](https://github.com/astral-sh/uv) (downloaded automatically if it is missing). Models are kept in the standard Hugging Face cache unless you choose another folder.
 
 | Engine | Used for |
 |---|---|
 | `mflux` | image generation, editing and upscaling |
 | `ltx-2-mlx` | LTX video with sound |
 | `mlx-video` | Wan video |
+| `mlx-lm` | chat |
 
 ## Headless checks
 
@@ -61,7 +63,7 @@ swift build
 
 ## Status
 
-Developed and tested on an M5 with 16 GB. Image generation, editing, 2× upscaling and LTX-2.5 video with sound (1024 × 576, 4.7 s, about six minutes) have been run end to end. Wan video is wired up and its command line is checked, but has not been run end to end yet.
+Developed and tested on an M5 with 16 GB. Image generation, editing, 2× upscaling and LTX-2.5 video with sound (1024 × 576, 4.7 s, about six minutes) and chat with a 4-bit 4B model (about 40 tokens a second) have been run end to end. Wan video is wired up and its command line is checked, but has not been run end to end yet.
 
 ## Licence
 

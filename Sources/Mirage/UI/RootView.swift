@@ -14,6 +14,7 @@ struct RootView: View {
             Group {
                 switch app.section {
                 case .create: CreateView()
+                case .chat: ChatView()
                 case .gallery: GalleryView()
                 case .models: ModelsView()
                 case .engines: EnginesView()

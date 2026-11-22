@@ -402,6 +402,7 @@ enum FileKinds {
 }
 
 func relativeDate(_ date: Date) -> String {
+    if abs(date.timeIntervalSinceNow) < 45 { return "just now" }
     let f = RelativeDateTimeFormatter()
     f.unitsStyle = .abbreviated
     return f.localizedString(for: date, relativeTo: Date())

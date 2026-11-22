@@ -1,11 +1,12 @@
 import SwiftUI
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case create, gallery, models, engines
+    case create, chat, gallery, models, engines
     var id: String { rawValue }
     var title: String {
         switch self {
         case .create: return "Create"
+        case .chat: return "Chat"
         case .gallery: return "Gallery"
         case .models: return "Models"
         case .engines: return "This Mac"
@@ -14,6 +15,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .create: return "sparkles"
+        case .chat: return "bubble.left.and.bubble.right"
         case .gallery: return "square.grid.2x2"
         case .models: return "shippingbox"
         case .engines: return "cpu"
@@ -255,8 +257,13 @@ final class AppState {
             defaults.set(false, forKey: "launchInProgress")
         }
         MemoryMonitor.shared.start()
+        ChatEngine.stopStrays()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { JobQueue.shared.cancelAll() }
+            MainActor.assumeIsolated {
+                JobQueue.shared.cancelAll()
+                ChatEngine.shared.unload(reason: nil)        // do not leave a model server running
+                ChatStore.shared.saveNow()
+            }
         }
         async let engines: Void = EngineManager.shared.refresh()
         async let models: Void = ModelStore.shared.refresh()
@@ -276,6 +283,14 @@ final class AppState {
     }
 
     func use(_ model: InstalledModel) {
+        if model.profile.isChat {
+            if AppSettings.shared.lastChatRepo != model.repo {
+                AppSettings.shared.lastChatRepo = model.repo
+                ChatEngine.shared.unload(reason: nil)
+            }
+            section = .chat
+            return
+        }
         composer.select(model)
         section = .create
     }

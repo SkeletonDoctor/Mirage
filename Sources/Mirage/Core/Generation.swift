@@ -136,6 +136,9 @@ enum CommandBuilder {
             if let image = p.inputImage { args += ["--image", image] }
             return BuiltCommand(executable: bin.appendingPathComponent("mlx_video.wan_2.generate"), arguments: args, output: output)
 
+        case .chat:
+            throw BuildError.message("\(model.title) is a chat model. Use it from the Chat tab.")
+
         case .unsupported:
             throw BuildError.message("No installed engine can run \(model.repo).")
         }
@@ -282,6 +285,8 @@ final class JobQueue {
 
     private func run(_ job: GenerationJob) async {
         current = job
+        // A loaded chat model would compete for the same memory, so it steps aside first.
+        ChatEngine.shared.unload(reason: "Unloaded to make room for a generation.")
         // Hand back the app's own image caches before a model needs the memory.
         ThumbnailCache.shared.purge()
         ImageLoader.shared.purge()

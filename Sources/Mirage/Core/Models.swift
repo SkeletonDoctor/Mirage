@@ -11,6 +11,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable {
     case mflux = "mflux"
     case ltx = "ltx-2-mlx"
     case mlxVideo = "mlx-video"
+    case mlxLM = "mlx-lm"
     var id: String { rawValue }
 }
 
@@ -20,6 +21,7 @@ enum ModelFamily: String, Codable {
     case ltx            // LTX-2.x packs for ltx-2-mlx
     case ltxMlxVideo    // LTX-2.x in mlx-video layout
     case wan            // Wan 2.x converted for mlx-video
+    case chat           // language models run by mlx-lm
     case unsupported
 
     var engine: EngineID? {
@@ -27,6 +29,7 @@ enum ModelFamily: String, Codable {
         case .mflux: return .mflux
         case .ltx: return .ltx
         case .ltxMlxVideo, .wan: return .mlxVideo
+        case .chat: return .mlxLM
         case .unsupported: return nil
         }
     }
@@ -59,11 +62,22 @@ struct ModelProfile {
     var fps = 24
     /// A helper that works on existing results (the upscaler) rather than generating from a prompt.
     var isTool = false
+    /// A language model for the Chat tab.
+    var isChat = false
 
     var engine: EngineID? { family.engine }
     var isRunnable: Bool { family != .unsupported }
 
     static let unsupported = ModelProfile(family: .unsupported, kind: .image, label: "Unsupported", command: "")
+
+    /// Words model makers use for versions with the refusal behaviour removed.
+    static let uncensoredMarkers = ["abliterated", "uncensored", "unlocked", "heretic", "dolphin", "josiefied", "unfiltered",
+                                    "decensored", "derestricted", "obliterated", "lorablated", "amoral"]
+
+    static func isUncensoredName(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return uncensoredMarkers.contains { lower.contains($0) }
+    }
 
     /// Works out the profile from a repo's name, tags and (when known) file list.
     static func resolve(repo: String, tags: [String] = [], library: String? = nil,
@@ -75,6 +89,24 @@ struct ModelProfile {
             || library == "mlx" || library == "mflux" || library == "mlx-video" || short.contains("mlx") || short.contains("mflux")
         func has(_ s: String) -> Bool { short.contains(s) }
         func hasFile(_ f: String) -> Bool { files?.contains(where: { $0 == f || $0.hasPrefix(f) }) ?? false }
+
+        // Chat models. The Chat tab is for unlocked models only, so the name has to say so.
+        if ModelProfile.isUncensoredName(short) {
+            let looksLikeLM: Bool
+            if let files {
+                looksLikeLM = files.contains("config.json")
+                    && files.contains(where: { $0 == "tokenizer.json" || $0 == "tokenizer_config.json" })
+                    && files.contains(where: { !$0.contains("/") && $0.hasSuffix(".safetensors") })
+            } else {
+                looksLikeLM = pipeline == "text-generation"
+            }
+            if looksLikeLM && (isMLX || files != nil) {
+                var p = ModelProfile(family: .chat, kind: .image, label: "Chat", command: "mlx_lm.server")
+                p.imageInput = .none
+                p.isChat = true
+                return p
+            }
+        }
 
         // The SeedVR2 upscaler: either the original weights mflux converts on load, or an mflux-format copy.
         if has("seedvr2") {
@@ -234,6 +266,9 @@ struct ModelFootprint: Codable, Equatable {
             return ModelFootprint(residentGB: gb(max(transformer, encoder)), lowMemoryGB: gb(max(streamed, encoder)))
         case .wan, .ltxMlxVideo:
             return ModelFootprint(residentGB: gb(largest), lowMemoryGB: gb(largest))
+        case .chat:
+            // All weights stay loaded while you chat, plus working room for the conversation.
+            return ModelFootprint(residentGB: gb(total) + 1.2, lowMemoryGB: gb(total) + 1.2)
         case .unsupported:
             return ModelFootprint(residentGB: gb(largest), lowMemoryGB: gb(largest))
         }

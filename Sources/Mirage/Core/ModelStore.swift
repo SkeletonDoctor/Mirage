@@ -58,7 +58,8 @@ final class ModelStore {
     }
 
     /// Models you generate with, as opposed to helpers such as the upscaler.
-    var generators: [InstalledModel] { models.filter { !$0.profile.isTool } }
+    var generators: [InstalledModel] { models.filter { !$0.profile.isTool && !$0.profile.isChat } }
+    var chatModels: [InstalledModel] { models.filter { $0.profile.isChat } }
     var upscaler: InstalledModel? { models.first { $0.profile.isTool } }
 
     func isInstalled(_ repo: String) -> Bool { models.contains { $0.repo == repo } }

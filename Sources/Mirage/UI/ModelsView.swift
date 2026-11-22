@@ -153,7 +153,7 @@ struct DownloadControl: View {
                 if installed.profile.isTool {
                     Text("Use it from a result's Upscale button").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Button("Use") { app.use(installed) }.buttonStyle(.miragePrimary)
+                    Button(installed.profile.isChat ? "Chat" : "Use") { app.use(installed) }.buttonStyle(.miragePrimary)
                 }
             }
         } else if let task = downloads.task(for: repo), task.state != .completed {
@@ -467,10 +467,14 @@ struct InstalledView: View {
                             }
                         }
                         Spacer()
-                        FitBadge(fit: plan.fit, compact: true)
+                        FitBadge(fit: model.profile.isChat
+                                 ? MemoryPlanner.chatFit(residentGB: model.footprint.residentGB, memoryLimitGB: settings.memoryLimitGB)
+                                 : plan.fit, compact: true)
                         Text(Format.bytes(model.sizeBytes)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
                             .frame(width: 70, alignment: .trailing)
-                        if !model.profile.isTool { Button("Use") { app.use(model) }.buttonStyle(.miragePrimary) }
+                        if !model.profile.isTool {
+                            Button(model.profile.isChat ? "Chat" : "Use") { app.use(model) }.buttonStyle(.miragePrimary)
+                        }
                         Menu {
                             Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([model.snapshot]) }
                             Button("Open on Hugging Face", systemImage: "safari") { NSWorkspace.shared.open(HFClient.pageURL(model.repo)) }

@@ -194,6 +194,18 @@ enum MemoryPlanner {
         return UpscalePlan(plan: plan, quant: chosenQuant, tile: chosenTile)
     }
 
+    /// Whether a chat model of this size fits: all its weights stay loaded, plus room for the conversation.
+    static func chatFit(weightBytes: Int64, memoryLimitGB: Double = 0, system: SystemInfo = .current) -> FitLevel {
+        chatFit(residentGB: Double(weightBytes) / 1_073_741_824 + 1.2, memoryLimitGB: memoryLimitGB, system: system)
+    }
+
+    static func chatFit(residentGB: Double, memoryLimitGB: Double = 0, system: SystemInfo = .current) -> FitLevel {
+        let budget = budgetGB(override: memoryLimitGB, system: system)
+        if residentGB <= budget * 0.85 { return .comfortable }
+        if residentGB <= budget * 1.1 { return .tight }
+        return .tooLarge
+    }
+
     /// Fit of a catalog variant at its default size, for the model cards.
     static func fit(variant: ModelVariant, profile: ModelProfile, system: SystemInfo = .current, memoryLimitGB: Double = 0) -> FitLevel {
         plan(footprint: variant.footprint, profile: profile, width: profile.defaultWidth, height: profile.defaultHeight,
