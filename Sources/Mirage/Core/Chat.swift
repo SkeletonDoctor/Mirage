@@ -127,6 +127,12 @@ final class ChatEngine {
         log = ""
         state = .loading("Preparing")
 
+        // Some repos ship their own Python model code. mlx-lm refuses to run it unless told to trust it,
+        // and Mirage never does: it would mean running an unreviewed program from the internet.
+        if model.files.contains("model.py") {
+            state = .failed(ChatEngine.customCodeMessage)
+            return false
+        }
         if JobQueue.shared.current != nil {
             state = .failed("A generation is running. Chat can load once it finishes.")
             return false
@@ -194,7 +200,15 @@ final class ChatEngine {
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard self.runner === runner else { return false }       // failed or was unloaded meanwhile
-            if await ping() {
+            let health = await ping()
+            // The server answers 503 once its model thread has died; stop at once instead of waiting it out.
+            if health == 503 || log.contains("generation thread died") {
+                let reason = log.contains("custom modu") ? ChatEngine.customCodeMessage : JobQueue.explain(log: log, status: 1)
+                unload(reason: nil)
+                state = .failed(reason)
+                return false
+            }
+            if health == 200 {
                 loadedRepo = repo
                 state = .ready
                 lastUsed = Date()
@@ -221,11 +235,14 @@ final class ChatEngine {
         notice = reason
     }
 
-    private func ping() async -> Bool {
+    static let customCodeMessage = "This model only runs with its own custom program code, which Mirage will not execute for safety. Pick a model without that requirement."
+
+    /// The server's health status code, or 0 while it is not answering yet.
+    private func ping() async -> Int {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
         request.timeoutInterval = 2
-        guard let (_, response) = try? await URLSession.shared.data(for: request) else { return false }
-        return (response as? HTTPURLResponse)?.statusCode == 200
+        guard let (_, response) = try? await URLSession.shared.data(for: request) else { return 0 }
+        return (response as? HTTPURLResponse)?.statusCode ?? 0
     }
 
     private func startHousekeeping() {

@@ -530,6 +530,8 @@ final class ChatModelSearch {
     var fitsOnly = false
     private(set) var results: [HFModel] = []
     private(set) var sizes: [String: Int64] = [:]
+    /// Repos that ship their own model code, which Mirage will not run.
+    private(set) var customCode: Set<String> = []
     /// Refusal figures read from model cards; a repo is in `checked` once its card has been read.
     private(set) var refusals: [String: RefusalReport] = [:]
     private(set) var checked: Set<String> = []
@@ -541,6 +543,7 @@ final class ChatModelSearch {
     /// Results after the refusal filter, in the chosen order.
     var visible: [HFModel] {
         var list = results
+        list = list.filter { !customCode.contains($0.id) }      // these cannot be run here at all
         if fitsOnly {
             let limitGB = AppSettings.shared.memoryLimitGB
             list = list.filter { m in sizes[m.id].map { MemoryPlanner.chatFit(weightBytes: $0, memoryLimitGB: limitGB) != .tooLarge } ?? false }
@@ -605,6 +608,7 @@ final class ChatModelSearch {
     /// Looks up a repo's weight size the first time its row appears.
     func size(for repo: String) async {
         guard sizes[repo] == nil, let detail = try? await HFClient.detail(repo) else { return }
+        if (detail.siblings ?? []).contains(where: { $0.rfilename == "model.py" }) { customCode.insert(repo) }
         sizes[repo] = (detail.siblings ?? []).filter { $0.rfilename.hasSuffix(".safetensors") }.reduce(0) { $0 + $1.bytes }
     }
 }
