@@ -55,4 +55,8 @@ swift build
 
 Developed and tested on an M5 with 16 GB. Image generation, editing and 2× upscaling have been run end to end. The video engines are wired up and their command lines are checked, but no video has been generated end to end yet.
 
+## Licence
+
+Mirage's own code is released under the [MIT licence](LICENSE).
+
 Models and engines belong to their authors and carry their own licences; check each model's page before commercial use.
