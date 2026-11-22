@@ -128,14 +128,64 @@ final class AppSettings {
     }
 }
 
-/// The Hugging Face access token lives in the login keychain, never in a file or defaults.
+/// The Hugging Face access token is kept in a file only this user account can read, the same way
+/// Hugging Face's own tools store it.
+///
+/// It used to live in the login keychain. macOS ties keychain access to an app's exact signature, and
+/// without an Apple Developer ID every build of Mirage has a new one, so the keychain asked for
+/// permission again on every launch after an update.
 enum TokenStore {
     private static let service = "Mirage.HuggingFaceToken"
     private static let account = "default"
     private static var cached: String??
+    private static var fileURL: URL { Paths.appSupport.appendingPathComponent("hf-token") }
 
     static func load() -> String? {
         if let cached { return cached }
+        var token = readFile(fileURL)
+        if token == nil { token = migrateFromKeychain() }
+        if token == nil {
+            // Fall back to a token saved by the `hf` command-line tool, if the user already logged in there.
+            token = readFile(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache/huggingface/token"))
+        }
+        cached = .some(token)
+        return token
+    }
+
+    static func save(_ token: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { delete(); return }
+        write(trimmed)
+        cached = .some(trimmed)
+    }
+
+    static func delete() {
+        try? FileManager.default.removeItem(at: fileURL)
+        deleteKeychainItem()
+        cached = nil
+    }
+
+    private static func readFile(_ url: URL) -> String? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func write(_ token: String) {
+        let fm = FileManager.default
+        try? fm.removeItem(at: fileURL)
+        // Created already restricted to the owner, so the token is never readable by others even briefly.
+        fm.createFile(atPath: fileURL.path, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600])
+    }
+
+    /// Moves a token saved by an earlier version out of the keychain. Tried once only: macOS may ask
+    /// permission this one last time, and after that the keychain is never touched at launch again.
+    private static func migrateFromKeychain() -> String? {
+        // Only the installed app migrates; the headless test binary must never raise a keychain prompt.
+        guard Bundle.main.bundleIdentifier != nil else { return nil }
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "tokenMigratedFromKeychain") else { return nil }
+        defaults.set(true, forKey: "tokenMigratedFromKeychain")
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -144,42 +194,20 @@ enum TokenStore {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var out: CFTypeRef?
-        var token: String?
-        if SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data {
-            token = String(data: data, encoding: .utf8)
-        }
-        if token == nil {
-            // Fall back to a token saved by the `hf` command-line tool, if the user already logged in there.
-            let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache/huggingface/token")
-            token = (try? String(contentsOf: file, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if token?.isEmpty == true { token = nil }
-        }
-        cached = .some(token)
+        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data,
+              let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else { return nil }
+        write(token)
+        deleteKeychainItem()
         return token
     }
 
-    static func save(_ token: String) {
-        delete()
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let add: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: Data(trimmed.utf8),
-        ]
-        SecItemAdd(add as CFDictionary, nil)
-        cached = .some(trimmed)
-    }
-
-    static func delete() {
+    private static func deleteKeychainItem() {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
-        cached = nil
     }
 }
 

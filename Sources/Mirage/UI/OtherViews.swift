@@ -423,7 +423,7 @@ struct AccountCard: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
                 HStack {
-                    Text("Only needed for gated models such as LTX-2.5. A read-only token is enough. It is stored in your Mac's keychain and sent only to huggingface.co.")
+                    Text("Only needed for gated models such as LTX-2.5. A read-only token is enough. It is kept in a file only your Mac account can read and is sent only to huggingface.co.")
                         .font(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Link("Create a token", destination: URL(string: "https://huggingface.co/settings/tokens")!).font(.caption)
