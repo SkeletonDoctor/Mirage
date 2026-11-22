@@ -74,6 +74,8 @@ final class AppSettings {
     var stopOnCritical: Bool { didSet { d.set(stopOnCritical, forKey: "stopOnCritical") } }
     var unlockLimits: Bool { didSet { d.set(unlockLimits, forKey: "unlockLimits") } }
     var animatedBackdrop: Bool { didSet { d.set(animatedBackdrop, forKey: "animatedBackdrop") } }
+    /// Off unless the user turns it on: lets chat models run program code shipped in their own repo.
+    var allowCustomCode: Bool { didSet { d.set(allowCustomCode, forKey: "allowCustomCode") } }
     /// Folder for generated images, and a separate one for videos.
     var imagePath: String { didSet { d.set(imagePath, forKey: "imagePath") } }
     var videoPath: String { didSet { d.set(videoPath, forKey: "videoPath") } }
@@ -105,6 +107,7 @@ final class AppSettings {
         stopOnCritical = d.bool(forKey: "stopOnCritical")
         unlockLimits = d.bool(forKey: "unlockLimits")
         animatedBackdrop = d.bool(forKey: "animatedBackdrop")
+        allowCustomCode = d.bool(forKey: "allowCustomCode")
         let legacy = d.string(forKey: "outputPath")
         imagePath = d.string(forKey: "imagePath") ?? legacy ?? Paths.defaultImageDir.path
         videoPath = d.string(forKey: "videoPath") ?? legacy ?? Paths.defaultVideoDir.path

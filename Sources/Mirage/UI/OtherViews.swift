@@ -174,6 +174,22 @@ struct EnginesView: View {
 
                 section("Storage", index: 1) { StorageCard() }
                 section("Memory", index: 2) { MemoryCard() }
+                section("Chat", index: 3) {
+                    Card {
+                        VStack(alignment: .leading, spacing: 8) {
+                            SwitchRow(title: "Allow models to run their own code",
+                                      subtitle: "Some chat models ship a program that runs on your Mac when the model loads. Off, Mirage refuses them.",
+                                      isOn: $settings.allowCustomCode)
+                            if settings.allowCustomCode {
+                                Label("That code runs with your account's full access to your files, and nobody at Mirage or Hugging Face has reviewed it. Only load such models from authors you trust. They are marked “Runs its own code” in the list.",
+                                      systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
+                            }
+                        }
+                        .animation(.snappy(duration: 0.25), value: settings.allowCustomCode)
+                    }
+                }
                 section("Hugging Face", index: 3) { AccountCard() }
 
                 section("Acceleration", index: 4) {

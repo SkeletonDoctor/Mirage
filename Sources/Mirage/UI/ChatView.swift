@@ -543,7 +543,7 @@ final class ChatModelSearch {
     /// Results after the refusal filter, in the chosen order.
     var visible: [HFModel] {
         var list = results
-        list = list.filter { !customCode.contains($0.id) }      // these cannot be run here at all
+        if !AppSettings.shared.allowCustomCode { list = list.filter { !customCode.contains($0.id) } }   // cannot run unless allowed
         if fitsOnly {
             let limitGB = AppSettings.shared.memoryLimitGB
             list = list.filter { m in sizes[m.id].map { MemoryPlanner.chatFit(weightBytes: $0, memoryLimitGB: limitGB) != .tooLarge } ?? false }
@@ -655,6 +655,12 @@ struct ChatModelRow: View {
                 }
             }
             Spacer(minLength: 8)
+            if search.customCode.contains(model.id) {
+                Label("Runs its own code", systemImage: "exclamationmark.shield").font(.caption.weight(.medium))
+                    .foregroundStyle(.orange).lineLimit(1).fixedSize()
+                    .padding(.horizontal, 8).padding(.vertical, 3).background(.orange.opacity(0.14), in: Capsule())
+                    .help("This model ships program code that runs on your Mac when it loads. Mirage has not reviewed it.")
+            }
             RefusalBadge(report: search.refusals[model.id], checked: search.checked.contains(model.id))
             if let fit { FitBadge(fit: fit, compact: true) }
             Button("Model Card", systemImage: "safari") { NSWorkspace.shared.open(HFClient.pageURL(model.id)) }

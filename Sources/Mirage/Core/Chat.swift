@@ -129,7 +129,8 @@ final class ChatEngine {
 
         // Some repos ship their own Python model code. mlx-lm refuses to run it unless told to trust it,
         // and Mirage never does: it would mean running an unreviewed program from the internet.
-        if model.files.contains("model.py") {
+        let needsCustomCode = model.files.contains("model.py")
+        if needsCustomCode && !AppSettings.shared.allowCustomCode {
             state = .failed(ChatEngine.customCodeMessage)
             return false
         }
@@ -170,8 +171,10 @@ final class ChatEngine {
         done
         wait $child
         """
-        let args = ["-c", launcher, bin.appendingPathComponent("mlx_lm.server").path,
+        var args = ["-c", launcher, bin.appendingPathComponent("mlx_lm.server").path,
                     "--model", model.snapshot.path, "--host", "127.0.0.1", "--port", "\(port)", "--log-level", "WARNING"]
+        // Only for models that need it, and only when the user has switched it on.
+        if needsCustomCode { args.append("--trust-remote-code") }
         let repo = model.repo
         Task { [weak self] in
             let status = await runner.run(URL(fileURLWithPath: "/bin/sh"), args, environment: env, cwd: Paths.workDir) { text in
@@ -203,7 +206,7 @@ final class ChatEngine {
             let health = await ping()
             // The server answers 503 once its model thread has died; stop at once instead of waiting it out.
             if health == 503 || log.contains("generation thread died") {
-                let reason = log.contains("custom modu") ? ChatEngine.customCodeMessage : JobQueue.explain(log: log, status: 1)
+                let reason = log.contains("custom modu") && !AppSettings.shared.allowCustomCode ? ChatEngine.customCodeMessage : JobQueue.explain(log: log, status: 1)
                 unload(reason: nil)
                 state = .failed(reason)
                 return false
@@ -235,7 +238,7 @@ final class ChatEngine {
         notice = reason
     }
 
-    static let customCodeMessage = "This model only runs with its own custom program code, which Mirage will not execute for safety. Pick a model without that requirement."
+    static let customCodeMessage = "This model only runs with its own custom program code, which Mirage does not run unless you allow it. Pick another model, or turn on “Allow models to run their own code” under This Mac → Chat."
 
     /// The server's health status code, or 0 while it is not answering yet.
     private func ping() async -> Int {
