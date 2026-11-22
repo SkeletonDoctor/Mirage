@@ -31,6 +31,7 @@ A native macOS app for running AI models on your own Mac with MLX: image generat
 - A Chat tab for local language models through mlx-lm, with saved conversations, streamed replies you can stop, copy or retry, and the model's reasoning shown separately when it has one.
 - It lists only unlocked models: those labelled abliterated, uncensored or similar on Hugging Face.
 - **Models → Chat** shows the refusal rate each model's author states on its card, sorts lowest first, and filters by a maximum rate and by what fits your Mac. These figures are the authors' own measurements; Mirage reads them but does not test them, and many cards give none.
+- Adjustable per-model behaviour: longest reply, context length, creativity, top-p, top-k, repetition penalty, seed, and whether the model reasons first. Conversations longer than the context length drop their oldest messages, and the chat says when that happens.
 
 ![The Chat tab](docs/chat.jpg)
 
@@ -54,6 +55,7 @@ A native macOS app for running AI models on your own Mac with MLX: image generat
 - Liquid Glass design with a top toolbar and custom controls.
 - Queue with visible waiting jobs, gallery with search and favourites, full-window image viewer, and an info panel with every setting used.
 - Light on resources: close to 0% CPU while idle in the background.
+- Updates itself: checks this repository's releases when it opens, and installs a new version in place after verifying its checksum. Nothing installs until you press Update.
 
 ## Install
 
