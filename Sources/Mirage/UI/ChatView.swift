@@ -67,6 +67,9 @@ final class ChatController {
 
             var text = "", thinking = "", pieces = 0
             var finish: String?
+            var promptTokens: Int?, replyTokens: Int?
+            let options = ChatOptions.current
+            let fitted = ChatContext.fit(history, system: settings.chatSystemPrompt, options: options)
             var lastFlush = Date.distantPast
             let started = Date()
             @MainActor func flush(final: Bool) {
@@ -76,20 +79,23 @@ final class ChatController {
                     c.messages[i].thinking = thinking.isEmpty ? nil : thinking
                     if final {
                         c.messages[i].hitLimit = finish == "length" ? true : nil
+                        c.messages[i].contextTokens = promptTokens
+                        c.messages[i].droppedMessages = fitted.dropped > 0 ? fitted.dropped : nil
                         let elapsed = Date().timeIntervalSince(started)
-                        c.messages[i].speed = elapsed > 0.5 ? Double(pieces) / elapsed : nil
+                        c.messages[i].speed = elapsed > 0.5 ? Double(replyTokens ?? pieces) / elapsed : nil
                         c.updated = Date()
                     }
                 }
             }
             do {
-                let stream = ChatEngine.shared.reply(to: history, system: settings.chatSystemPrompt,
-                                                     temperature: settings.chatTemperature, maxTokens: Int(settings.chatMaxTokens))
+                let stream = ChatEngine.shared.reply(to: fitted.kept, system: settings.chatSystemPrompt, options: options)
                 for try await piece in stream {
                     if Task.isCancelled { break }
                     text += piece.text
                     thinking += piece.thinking
                     if let f = piece.finish { finish = f }
+                    if let p = piece.promptTokens { promptTokens = p }
+                    if let r = piece.replyTokens { replyTokens = r }
                     if !piece.text.isEmpty || !piece.thinking.isEmpty { pieces += 1 }
                     // Redraw about twelve times a second at most, however fast the words arrive.
                     if Date().timeIntervalSince(lastFlush) > 0.08 { flush(final: false); lastFlush = Date() }
@@ -199,6 +205,7 @@ struct ChatSidebar: View {
     @State private var controller = ChatController.shared
     @State private var settings = AppSettings.shared
     @State private var showSettings = false
+    @State private var showSampling = false
 
     var body: some View {
         @Bindable var settings = settings
@@ -226,11 +233,55 @@ struct ChatSidebar: View {
                 Divider()
                 modelSection
                 DisclosureGroup(isExpanded: $showSettings) {
-                    VStack(alignment: .leading, spacing: 10) {
+                    ViewThatFits(in: .vertical) {
+                        settingsControls
+                        ScrollView { settingsControls.padding(.trailing, 4) }.scrollIndicators(.automatic)
+                    }
+                    .frame(maxHeight: 330)
+                } label: {
+                    SectionLabel("Settings")
+                }
+            }
+            .padding(14)
+        }
+    }
+
+    /// Every adjustable chat setting. Scrolls when the sidebar is too short to show it all.
+    private var settingsControls: some View {
+        @Bindable var settings = settings
+        return VStack(alignment: .leading, spacing: 10) {
                         LabeledSlider(title: "Creativity", value: $settings.chatTemperature, range: 0...1.5, step: 0.05,
                                       display: String(format: "%.2f", settings.chatTemperature))
                         LabeledSlider(title: "Longest reply", value: $settings.chatMaxTokens, range: 256...16384, step: 256,
                                       display: "\(Int(settings.chatMaxTokens)) tokens")
+                            .help("The most the model may write in one reply, including its reasoning.")
+                        LabeledSlider(title: "Context length", value: $settings.chatContext, range: 2048...131072, step: 2048,
+                                      display: "\(Int(settings.chatContext)) tokens")
+                            .help("How much of the conversation the model is given. Older messages beyond this are left out. Larger values use more memory and slow each reply.")
+                        SwitchRow(title: "Let the model reason first", isOn: $settings.chatThinking).font(.callout)
+                            .help("Only affects models that can think before answering. Off gives faster, shorter replies.")
+                        DisclosureGroup(isExpanded: $showSampling) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                LabeledSlider(title: "Top-p", value: $settings.chatTopP, range: 0.05...1, step: 0.05,
+                                              display: settings.chatTopP >= 0.999 ? "Off" : String(format: "%.2f", settings.chatTopP))
+                                    .help("Limits word choice to the most likely options that together reach this probability.")
+                                LabeledSlider(title: "Top-k", value: $settings.chatTopK, range: 0...200, step: 5,
+                                              display: settings.chatTopK < 1 ? "Off" : "\(Int(settings.chatTopK))")
+                                    .help("Limits word choice to this many most likely options.")
+                                LabeledSlider(title: "Repetition penalty", value: $settings.chatRepetition, range: 1...1.5, step: 0.05,
+                                              display: settings.chatRepetition <= 1.001 ? "Off" : String(format: "%.2f", settings.chatRepetition))
+                                    .help("Discourages the model from repeating itself.")
+                                HStack {
+                                    Text("Seed").font(.callout)
+                                    TextField("Random", text: $settings.chatSeed).textFieldStyle(.roundedBorder).frame(width: 110)
+                                    Spacer()
+                                    Button("Reset All") { withAnimation(.snappy) { settings.resetChatDefaults() } }.buttonStyle(.softSmall)
+                                }
+                            }
+                            .padding(.top, 6)
+                        } label: {
+                            Text("Sampling").font(.callout).foregroundStyle(.secondary)
+                        }
                         Text("Instructions for every chat").font(.callout)
                         TextEditor(text: $settings.chatSystemPrompt)
                             .font(.callout).scrollContentBackground(.hidden).padding(6)
@@ -238,12 +289,6 @@ struct ChatSidebar: View {
                             .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .padding(.top, 8)
-                } label: {
-                    SectionLabel("Settings")
-                }
-            }
-            .padding(14)
-        }
     }
 
     @ViewBuilder
@@ -456,6 +501,14 @@ struct MessageRow: View {
                         }
                         if let speed = message.speed {
                             Text(String(format: "%.0f tokens/s", speed)).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                        }
+                        if let used = message.contextTokens {
+                            Text("context \(used) of \(Int(AppSettings.shared.chatContext))").font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                                .help("Tokens of conversation the model was given for this reply.")
+                        }
+                        if let dropped = message.droppedMessages {
+                            Text("\(dropped) older message\(dropped == 1 ? "" : "s") left out").font(.caption2).foregroundStyle(.orange)
+                                .help("The conversation is longer than the context length, so the oldest messages were not sent. Raise Context length under Settings to include more.")
                         }
                     }
                 }

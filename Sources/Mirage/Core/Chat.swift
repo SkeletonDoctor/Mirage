@@ -12,6 +12,52 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var speed: Double?
     /// True when the reply was cut off by the length limit rather than ending on its own.
     var hitLimit: Bool?
+    /// Tokens of conversation the model was given for this reply, as counted by the engine.
+    var contextTokens: Int?
+    /// How many older messages were left out to stay within the context length.
+    var droppedMessages: Int?
+}
+
+/// Sampling and length settings for one reply.
+struct ChatOptions {
+    var temperature = 0.7
+    var maxTokens = 4096
+    var contextTokens = 16384
+    var topP = 1.0
+    var topK = 0
+    var repetitionPenalty = 1.0
+    var thinking = true
+    var seed: Int? = nil
+
+    @MainActor static var current: ChatOptions {
+        let s = AppSettings.shared
+        return ChatOptions(temperature: s.chatTemperature, maxTokens: Int(s.chatMaxTokens), contextTokens: Int(s.chatContext),
+                           topP: s.chatTopP, topK: Int(s.chatTopK), repetitionPenalty: s.chatRepetition,
+                           thinking: s.chatThinking, seed: Int(s.chatSeed.trimmingCharacters(in: .whitespaces)))
+    }
+}
+
+enum ChatContext {
+    /// Rough token count: about three and a half characters per token for English text.
+    static func estimateTokens(_ text: String) -> Int { Int((Double(text.utf8.count) / 3.5).rounded(.up)) + 4 }
+
+    /// Keeps the newest messages that fit in the context length after leaving room for the reply.
+    /// The latest message is always kept. Returns the kept messages and how many were dropped.
+    static func fit(_ messages: [ChatMessage], system: String, options: ChatOptions) -> (kept: [ChatMessage], dropped: Int) {
+        let usable = max(512, options.contextTokens - min(options.maxTokens, options.contextTokens / 2) - estimateTokens(system))
+        var kept: [ChatMessage] = []
+        var used = 0
+        for message in messages.reversed() where !message.text.isEmpty {
+            let cost = estimateTokens(message.text)
+            if !kept.isEmpty && used + cost > usable { break }
+            kept.append(message)
+            used += cost
+        }
+        kept.reverse()
+        // A conversation should not open on an assistant turn once its question has been cut away.
+        while kept.count > 1, kept.first?.role == "assistant" { kept.removeFirst() }
+        return (kept, messages.filter { !$0.text.isEmpty }.count - kept.count)
+    }
 }
 
 struct Conversation: Codable, Identifiable, Equatable {
@@ -294,10 +340,10 @@ final class ChatEngine {
         }
     }
 
-    struct Piece { var text = ""; var thinking = ""; var finish: String? = nil }
+    struct Piece { var text = ""; var thinking = ""; var finish: String? = nil; var promptTokens: Int? = nil; var replyTokens: Int? = nil }
 
     /// Streams a reply. Each element is the new text since the previous one.
-    func reply(to messages: [ChatMessage], system: String, temperature: Double, maxTokens: Int) -> AsyncThrowingStream<Piece, Error> {
+    func reply(to messages: [ChatMessage], system: String, options: ChatOptions) -> AsyncThrowingStream<Piece, Error> {
         let port = self.port
         isReplying = true
         lastUsed = Date()
@@ -305,8 +351,13 @@ final class ChatEngine {
         let trimmedSystem = system.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedSystem.isEmpty { payload.append(["role": "system", "content": trimmedSystem]) }
         for m in messages where !m.text.isEmpty { payload.append(["role": m.role, "content": m.text]) }
-        let body: [String: Any] = ["model": "default_model", "messages": payload, "stream": true,
-                                   "temperature": temperature, "max_tokens": maxTokens]
+        var body: [String: Any] = ["model": "default_model", "messages": payload, "stream": true,
+                                   "stream_options": ["include_usage": true],
+                                   "temperature": options.temperature, "max_tokens": options.maxTokens,
+                                   "top_p": options.topP, "top_k": options.topK]
+        if options.repetitionPenalty > 1.001 { body["repetition_penalty"] = options.repetitionPenalty }
+        if let seed = options.seed { body["seed"] = seed }
+        if !options.thinking { body["chat_template_kwargs"] = ["enable_thinking": false] }
 
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -325,8 +376,12 @@ final class ChatEngine {
                         let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                         if json == "[DONE]" { break }
                         guard let data = json.data(using: .utf8),
-                              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                              let choice = (object["choices"] as? [[String: Any]])?.first else { continue }
+                              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                        // The last chunk carries the engine's own token counts.
+                        if let usage = object["usage"] as? [String: Any] {
+                            continuation.yield(Piece(promptTokens: usage["prompt_tokens"] as? Int, replyTokens: usage["completion_tokens"] as? Int))
+                        }
+                        guard let choice = (object["choices"] as? [[String: Any]])?.first else { continue }
                         var piece = Piece()
                         // "length" means the reply ran into the token limit; "stop" means it ended by itself.
                         piece.finish = choice["finish_reason"] as? String

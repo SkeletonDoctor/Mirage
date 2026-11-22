@@ -86,6 +86,22 @@ final class AppSettings {
     var chatTemperature: Double { didSet { d.set(chatTemperature, forKey: "chatTemperature") } }
     var chatMaxTokens: Double { didSet { d.set(chatMaxTokens, forKey: "chatMaxTokens") } }
     var chatSystemPrompt: String { didSet { d.set(chatSystemPrompt, forKey: "chatSystemPrompt") } }
+    /// How much conversation the model is given, in tokens. Older messages beyond this are left out.
+    var chatContext: Double { didSet { d.set(chatContext, forKey: "chatContext") } }
+    var chatTopP: Double { didSet { d.set(chatTopP, forKey: "chatTopP") } }
+    /// 0 turns top-k off.
+    var chatTopK: Double { didSet { d.set(chatTopK, forKey: "chatTopK") } }
+    /// 1 turns the repetition penalty off.
+    var chatRepetition: Double { didSet { d.set(chatRepetition, forKey: "chatRepetition") } }
+    var chatThinking: Bool { didSet { d.set(chatThinking, forKey: "chatThinking") } }
+    /// Empty means a new random seed each reply.
+    var chatSeed: String { didSet { d.set(chatSeed, forKey: "chatSeed") } }
+    var autoCheckUpdates: Bool { didSet { d.set(autoCheckUpdates, forKey: "autoCheckUpdates") } }
+
+    func resetChatDefaults() {
+        chatTemperature = 0.7; chatMaxTokens = 4096; chatContext = 16384
+        chatTopP = 1; chatTopK = 0; chatRepetition = 1; chatThinking = true; chatSeed = ""
+    }
     // Upscaler choices. 0 means "choose for me" for precision and tile size.
     var upscaleScale: Double { didSet { d.set(upscaleScale, forKey: "upscaleScale") } }
     var upscaleSoftness: Double { didSet { d.set(upscaleSoftness, forKey: "upscaleSoftness") } }
@@ -118,6 +134,13 @@ final class AppSettings {
         // Reasoning models spend part of this budget thinking before they answer, so the default is generous.
         chatMaxTokens = d.object(forKey: "chatMaxTokens") as? Double ?? 4096
         chatSystemPrompt = d.string(forKey: "chatSystemPrompt") ?? ""
+        chatContext = d.object(forKey: "chatContext") as? Double ?? 16384
+        chatTopP = d.object(forKey: "chatTopP") as? Double ?? 1
+        chatTopK = d.object(forKey: "chatTopK") as? Double ?? 0
+        chatRepetition = d.object(forKey: "chatRepetition") as? Double ?? 1
+        chatThinking = d.object(forKey: "chatThinking") as? Bool ?? true
+        chatSeed = d.string(forKey: "chatSeed") ?? ""
+        autoCheckUpdates = d.object(forKey: "autoCheckUpdates") as? Bool ?? true
         recentPrompts = d.stringArray(forKey: "recentPrompts") ?? []
         upscaleScale = d.object(forKey: "upscaleScale") as? Double ?? 2
         upscaleSoftness = d.double(forKey: "upscaleSoftness")

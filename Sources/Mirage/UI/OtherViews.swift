@@ -172,6 +172,7 @@ struct EnginesView: View {
                 }
                 .appearStagger(0)
 
+                section("Updates", index: 1) { UpdateCard() }
                 section("Storage", index: 1) { StorageCard() }
                 section("Memory", index: 2) { MemoryCard() }
                 section("Chat", index: 3) {
@@ -253,6 +254,61 @@ struct EnginesView: View {
                 }
                 Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+/// Current version, update check and install.
+struct UpdateCard: View {
+    @State private var updater = Updater.shared
+    @State private var settings = AppSettings.shared
+
+    var body: some View {
+        @Bindable var settings = settings
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.down.app").font(.title3).frame(width: 34, height: 34).mirageGradient()
+                        .background(.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Mirage \(updater.currentVersion)").fontWeight(.medium)
+                        Text(statusText).font(.caption).foregroundStyle(isFailed ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    switch updater.state {
+                    case .checking, .installing:
+                        ProgressView().controlSize(.small)
+                    case .downloading(let fraction):
+                        ProgressView(value: fraction).frame(width: 110)
+                    case .available(let update):
+                        Button("Release Notes") { NSWorkspace.shared.open(update.pageURL) }.buttonStyle(.soft)
+                        Button("Update to \(update.version)") { Task { await updater.install(update) } }.buttonStyle(.miragePrimary)
+                    default:
+                        Button("Check for Updates") { Task { await updater.check() } }.buttonStyle(.soft)
+                    }
+                }
+                Divider()
+                SwitchRow(title: "Check for updates automatically",
+                          subtitle: "Looks at Mirage's GitHub releases when the app opens, at most twice a day. Nothing is installed without you pressing Update.",
+                          isOn: $settings.autoCheckUpdates)
+            }
+        }
+        .animation(.snappy(duration: 0.25), value: updater.state)
+    }
+
+    private var isFailed: Bool { if case .failed = updater.state { return true }; return false }
+
+    private var statusText: String {
+        switch updater.state {
+        case .idle:
+            return updater.lastChecked.map { "Last checked \(relativeDate($0))." } ?? "Not checked yet."
+        case .checking: return "Checking GitHub…"
+        case .upToDate: return "You have the latest version."
+        case .available(let u): return "Version \(u.version) is available (\(Format.bytes(u.size)))."
+        case .downloading(let f): return "Downloading… \(Int(f * 100))%"
+        case .installing: return "Installing. Mirage will reopen in a moment."
+        case .failed(let message): return message
         }
     }
 }

@@ -6,6 +6,8 @@ struct RootView: View {
     @State private var queue = JobQueue.shared
     @State private var store = ModelStore.shared
     @State private var gallery = Gallery.shared
+    @State private var updater = Updater.shared
+    @State private var dismissedUpdate = false
 
     var body: some View {
         @Bindable var app = app
@@ -54,7 +56,23 @@ struct RootView: View {
         .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .overlay(alignment: .top) {
-            if let finished = downloads.justFinished {
+            if let update = updater.available, !dismissedUpdate {
+                HStack(spacing: 6) {
+                    ToastView(symbol: "arrow.down.app.fill", tint: Brand.violet, title: "Mirage \(update.version) is available", actionTitle: "Update") {
+                        Task { await updater.install(update) }
+                    }
+                    Button("Later", systemImage: "xmark") { dismissedUpdate = true }
+                        .buttonStyle(IconButtonStyle(size: 26)).help("Not now. You can update later from This Mac.")
+                }
+                .padding(.top, 10)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if case .downloading(let fraction) = updater.state {
+                ToastView(symbol: "arrow.down.circle", tint: Brand.violet, title: "Downloading update… \(Int(fraction * 100))%")
+                    .padding(.top, 10)
+            } else if updater.state == .installing {
+                ToastView(symbol: "arrow.triangle.2.circlepath", tint: Brand.violet, title: "Installing update, Mirage will reopen")
+                    .padding(.top, 10)
+            } else if let finished = downloads.justFinished {
                 ToastView(symbol: "checkmark.circle.fill", title: "\(finished.title) is ready",
                           actionTitle: store.model(finished.repo) != nil ? "Use" : nil) {
                     if let model = store.model(finished.repo) { app.use(model) }
@@ -69,6 +87,8 @@ struct RootView: View {
             }
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.8), value: downloads.justFinished?.id)
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: updater.state)
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: dismissedUpdate)
         .overlay(alignment: .bottom) {
             if let deleted = gallery.lastDeleted {
                 ToastView(symbol: "trash", tint: .secondary, title: "Moved to Trash", actionTitle: "Undo") {

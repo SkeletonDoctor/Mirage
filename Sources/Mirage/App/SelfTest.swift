@@ -32,9 +32,11 @@ enum SelfTest {
             var reply = "", thinking = ""
             let t0 = Date()
             do {
-                for try await piece in ChatEngine.shared.reply(to: [ChatMessage(role: "user", text: args[2])], system: "",
-                                                                 temperature: 0.7, maxTokens: 200) {
+                var options = ChatOptions(); options.maxTokens = 200; options.thinking = !args.contains("--no-think"); options.topK = 40
+                for try await piece in ChatEngine.shared.reply(to: [ChatMessage(role: "user", text: args[2])], system: "", options: options) {
                     reply += piece.text; thinking += piece.thinking
+                    if let f = piece.finish { print("finish: \(f)") }
+                    if let p = piece.promptTokens { print("engine counted \(p) prompt tokens, \(piece.replyTokens ?? 0) reply tokens") }
                 }
             } catch { print("stream error: \(error.localizedDescription)") }
             try? await Task.sleep(nanoseconds: 3_500_000_000)
@@ -57,6 +59,21 @@ enum SelfTest {
             }
             print("\(withFigure) of \(min(45, found.count)) have a stated figure")
             return 0
+        case "update":
+            // Checks the latest release, then (with a folder argument) stages and installs it there as a dry run.
+            do {
+                let latest = try await Updater.fetchLatest()
+                print("latest \(latest.version) · \(Format.bytes(latest.size)) · checksum in notes: \(latest.sha256 != nil)")
+                print("newer than 1.0? \(Updater.isNewer(latest.version, than: "1.0")) · newer than itself? \(Updater.isNewer(latest.version, than: latest.version)) · 1.10 > 1.9? \(Updater.isNewer("1.10", than: "1.9"))")
+                if args.count > 1 {
+                    let target = URL(fileURLWithPath: args[1]).appendingPathComponent("Mirage.app")
+                    let staged = try await Updater.downloadAndStage(latest) { _ in }
+                    try Updater.swapAndRelaunch(staged: staged, target: target, relaunch: false, waitForPID: nil)
+                    let v = NSDictionary(contentsOf: target.appendingPathComponent("Contents/Info.plist"))?["CFBundleShortVersionString"] ?? "?"
+                    print("installed into \(target.path): version \(v)")
+                }
+                return 0
+            } catch { print("update failed: \(error.localizedDescription)"); return 1 }
         case "relocate":
             await ModelStore.shared.refresh()
             let target = args.count > 1 && args[1] != "default" ? URL(fileURLWithPath: args[1], isDirectory: true) : Paths.defaultHFHub

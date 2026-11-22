@@ -272,6 +272,7 @@ final class AppState {
         _ = await (engines, models)
         pickDefaultModel()
         DownloadManager.shared.restoreInterrupted()
+        await Updater.shared.checkAtLaunchIfDue()
     }
 
     func pickDefaultModel() {
@@ -365,6 +366,12 @@ struct MirageApp: App {
         .defaultSize(width: 1280, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    app.section = .engines
+                    Task { await Updater.shared.check() }
+                }
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { app.section = .engines }.keyboardShortcut(",", modifiers: .command)
             }
