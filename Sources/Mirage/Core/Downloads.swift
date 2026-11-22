@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 let ltxDefaultTextEncoder = "mlx-community/gemma-3-12b-it-4bit"
 
@@ -91,7 +92,7 @@ final class DownloadManager {
         for part in task.parts.dropFirst() {
             let blobs = Paths.repoDir(part.repo).appendingPathComponent("blobs")
             for file in (try? FileManager.default.contentsOfDirectory(at: blobs, includingPropertiesForKeys: nil)) ?? []
-            where file.pathExtension == "incomplete" {
+            where file.pathExtension == "incomplete" || file.lastPathComponent.hasSuffix(".incomplete.map") {
                 try? FileManager.default.removeItem(at: file)
             }
         }
@@ -170,7 +171,7 @@ final class DownloadManager {
             let blobs = Paths.repoDir(p.repo).appendingPathComponent("blobs")
             let blob = blobs.appendingPathComponent(p.file.blobName!)
             if fm.fileExists(atPath: blob.path) { done += p.file.bytes }
-            else { done += min(existingSize(blob.appendingPathExtension("incomplete")), p.file.bytes) }
+            else { done += SegmentedDownload.bytesOnDisk(partial: blob.appendingPathExtension("incomplete"), size: p.file.bytes) }
         }
         task.receivedBytes = done
         // Refuse early if the disk cannot hold what is left, rather than failing hours in.
@@ -204,8 +205,29 @@ final class DownloadManager {
             if !fm.fileExists(atPath: blob.path) {
                 task.currentFile = p.file.rfilename
                 let partial = blob.appendingPathExtension("incomplete")
-                let offset = existingSize(partial)
-                if p.file.bytes > 0 && offset >= p.file.bytes {
+                var fetchedInParts = false
+                if p.file.bytes >= SegmentedDownload.minimumSize {
+                    // Big file: fetch many parts at once over separate connections.
+                    let already = SegmentedDownload.bytesOnDisk(partial: partial, size: p.file.bytes)
+                    let segmented = SegmentedDownload(resolve: HFClient.request(HFClient.fileURL(repo: p.repo, revision: p.revision, path: p.file.rfilename)),
+                                                      partial: partial, size: p.file.bytes, sha256: p.file.lfs?.sha256, repo: p.repo,
+                                                      onBytes: { counter.add($0) },
+                                                      onVerifying: { Task { @MainActor in task.currentFile = "Checking \(p.file.rfilename)" } })
+                    do {
+                        try await segmented.run()
+                        try? fm.removeItem(at: blob)
+                        try fm.moveItem(at: partial, to: blob)
+                        fetchedInParts = true
+                    } catch SegmentedDownload.Failure.rangesUnsupported {
+                        // The server would not serve parts; start this file again the simple way.
+                        SegmentedDownload.discard(partial: partial)
+                        task.receivedBytes -= already
+                    }
+                }
+                let offset = fetchedInParts ? 0 : existingSize(partial)
+                if fetchedInParts {
+                    // already moved into place
+                } else if p.file.bytes > 0 && offset >= p.file.bytes {
                     try? fm.removeItem(at: blob)
                     try fm.moveItem(at: partial, to: blob)
                 } else {
@@ -361,5 +383,238 @@ final class FileDownloader: NSObject, URLSessionDataDelegate, @unchecked Sendabl
         else if wasCancelled { cont?.resume(throwing: CancellationError()) }
         else if let error { cont?.resume(throwing: HFError.offline(error.localizedDescription)) }
         else { cont?.resume(returning: restarted) }
+    }
+}
+
+
+/// Downloads one large file as many parts at once, each over its own connection, writing every part
+/// straight to its place in the file. A small map beside the file records the finished parts, so a
+/// paused or interrupted download carries on where it stopped.
+struct SegmentedDownload: Sendable {
+    enum Failure: Error { case rangesUnsupported }
+
+    static let minimumSize: Int64 = 64 * 1024 * 1024
+    static let partSize: Int64 = 8 * 1024 * 1024
+    static let connections = 8
+
+    let resolve: URLRequest
+    let partial: URL
+    let size: Int64
+    let sha256: String?
+    let repo: String
+    let onBytes: @Sendable (Int64) -> Void
+    let onVerifying: @Sendable () -> Void
+
+    struct MapSnapshot: Codable, Sendable {
+        var partSize: Int64
+        var size: Int64
+        var done: [Int]
+    }
+    private typealias Map = MapSnapshot
+
+    private static func mapURL(_ partial: URL) -> URL { partial.appendingPathExtension("map") }
+
+    private static func loadMap(_ partial: URL, size: Int64) -> Map? {
+        guard let data = try? Data(contentsOf: mapURL(partial)), let map = try? JSONDecoder().decode(Map.self, from: data),
+              map.size == size, map.partSize > 0 else { return nil }
+        return map
+    }
+
+    private static func partLength(_ index: Int, partSize: Int64, size: Int64) -> Int64 {
+        min(partSize, size - Int64(index) * partSize)
+    }
+
+    /// Bytes of this file already downloaded, whether it was fetched in parts or front to back.
+    static func bytesOnDisk(partial: URL, size: Int64) -> Int64 {
+        if let map = loadMap(partial, size: size) {
+            return map.done.reduce(0) { $0 + partLength($1, partSize: map.partSize, size: size) }
+        }
+        let existing = ((try? FileManager.default.attributesOfItem(atPath: partial.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        return min(existing, size)
+    }
+
+    static func discard(partial: URL) {
+        try? FileManager.default.removeItem(at: partial)
+        try? FileManager.default.removeItem(at: mapURL(partial))
+    }
+
+    func run() async throws {
+        let fm = FileManager.default
+        // Pick up an earlier attempt: a part map, or a file that was being written front to back.
+        var map = Self.loadMap(partial, size: size) ?? {
+            let existing = ((try? fm.attributesOfItem(atPath: partial.path))?[.size] as? NSNumber)?.int64Value ?? 0
+            let whole = existing < size ? Int(existing / Self.partSize) : 0
+            return Map(partSize: Self.partSize, size: size, done: Array(0..<whole))
+        }()
+        if !fm.fileExists(atPath: partial.path) { fm.createFile(atPath: partial.path, contents: nil) }
+        let sizing = try FileHandle(forWritingTo: partial)
+        try sizing.truncate(atOffset: UInt64(size))        // sparse: takes no space until parts arrive
+        try sizing.close()
+
+        let count = Int((size + map.partSize - 1) / map.partSize)
+        let finished = Set(map.done)
+        let pending = (0..<count).filter { !finished.contains($0) }
+        let state = PartState(pending: pending, map: map, mapURL: Self.mapURL(partial))
+        let source = SourceURL(resolve: resolve, repo: repo)
+        let partSize = map.partSize
+        map.done = []                                       // the actor owns the list from here
+
+        if !pending.isEmpty {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for _ in 0..<min(Self.connections, pending.count) {
+                    group.addTask {
+                        // One session per worker, so each gets its own connection instead of sharing one.
+                        let config = URLSessionConfiguration.ephemeral
+                        config.timeoutIntervalForRequest = 60
+                        config.waitsForConnectivity = true
+                        config.urlCache = nil
+                        let session = URLSession(configuration: config)
+                        defer { session.invalidateAndCancel() }
+                        let handle = try FileHandle(forWritingTo: partial)
+                        defer { try? handle.close() }
+
+                        while let index = await state.next() {
+                            try Task.checkCancellation()
+                            let start = Int64(index) * partSize
+                            let length = Self.partLength(index, partSize: partSize, size: size)
+                            let data = try await Self.fetch(session: session, source: source, start: start, length: length)
+                            try handle.seek(toOffset: UInt64(start))
+                            try handle.write(contentsOf: data)
+                            await state.finish(index)
+                            onBytes(length)
+                        }
+                    }
+                }
+                try await group.waitForAll()
+            }
+        }
+
+        // Parts were written out of order, so confirm the whole file against Hugging Face's checksum.
+        if let sha256 {
+            onVerifying()
+            let url = partial
+            let actual = try await Task.detached(priority: .userInitiated) { try Self.hash(of: url) }.value
+            if actual != sha256.lowercased() {
+                Self.discard(partial: partial)
+                throw HFError.other("The downloaded file did not match its checksum and was discarded. Start the download again.")
+            }
+        }
+        try? fm.removeItem(at: Self.mapURL(partial))
+    }
+
+    /// Fetches one part, retrying brief network failures and refreshing the download link if it expires.
+    private static func fetch(session: URLSession, source: SourceURL, start: Int64, length: Int64) async throws -> Data {
+        var lastError: Error = HFError.offline("no response")
+        for attempt in 0..<5 {
+            try Task.checkCancellation()
+            do {
+                var request = URLRequest(url: try await source.url(refresh: false))
+                request.setValue("bytes=\(start)-\(start + length - 1)", forHTTPHeaderField: "Range")
+                let (data, response) = try await session.data(for: request)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if code == 206, Int64(data.count) == length { return data }
+                if code == 200 { throw Failure.rangesUnsupported }
+                if code == 401 || code == 403 || code == 410 {
+                    _ = try await source.url(refresh: true)         // signed link expired
+                    lastError = HFError.http(code)
+                    continue
+                }
+                lastError = code == 206 ? HFError.offline("a part arrived short") : HFError.http(code)
+            } catch let failure as Failure {
+                throw failure
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as HFError {
+                throw error
+            } catch {
+                if (error as? URLError)?.code == .cancelled { throw CancellationError() }
+                lastError = HFError.offline(error.localizedDescription)
+            }
+            try await Task.sleep(nanoseconds: UInt64(400_000_000 * (attempt + 1)))
+        }
+        throw lastError
+    }
+
+    private static func hash(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            try Task.checkCancellation()
+            let chunk = try handle.read(upToCount: 8 * 1024 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Hands out the parts still to fetch and records the finished ones on disk.
+private actor PartState {
+    private var pending: [Int]
+    private var done: [Int]
+    private let partSize: Int64
+    private let size: Int64
+    private let mapURL: URL
+    private var sinceSave = 0
+
+    init(pending: [Int], map: SegmentedDownload.MapSnapshot, mapURL: URL) {
+        self.pending = pending.reversed()
+        self.done = map.done
+        self.partSize = map.partSize
+        self.size = map.size
+        self.mapURL = mapURL
+    }
+
+    func next() -> Int? { pending.popLast() }
+
+    func finish(_ index: Int) {
+        done.append(index)
+        sinceSave += 1
+        if sinceSave >= 4 || pending.isEmpty { save() }
+    }
+
+    private func save() {
+        sinceSave = 0
+        let body = "{\"partSize\":\(partSize),\"size\":\(size),\"done\":[\(done.map(String.init).joined(separator: ","))]}"
+        try? Data(body.utf8).write(to: mapURL, options: .atomic)
+    }
+}
+
+/// The signed delivery-network address behind a Hugging Face file link. Resolved once and shared by
+/// all parts, so only one request per file counts against Hugging Face's request limits.
+private actor SourceURL {
+    private let resolve: URLRequest
+    private let repo: String
+    private var cached: URL?
+    private var inFlight: Task<URL, Error>?
+
+    init(resolve: URLRequest, repo: String) { self.resolve = resolve; self.repo = repo }
+
+    func url(refresh: Bool) async throws -> URL {
+        if refresh { cached = nil }
+        if let cached { return cached }
+        if let inFlight { return try await inFlight.value }
+        let request = resolve
+        let repo = repo
+        let task = Task { () throws -> URL in
+            var probe = request
+            probe.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+            let (_, response) = try await URLSession.shared.data(for: probe)
+            let http = response as? HTTPURLResponse
+            switch http?.statusCode ?? 0 {
+            case 200: throw SegmentedDownload.Failure.rangesUnsupported
+            case 206: break
+            case 401, 403: throw HFError.gated(repo)
+            case 404: throw HFError.notFound
+            default: throw HFError.http(http?.statusCode ?? 0)
+            }
+            return http?.url ?? request.url!
+        }
+        inFlight = task
+        defer { inFlight = nil }
+        let url = try await task.value
+        cached = url
+        return url
     }
 }

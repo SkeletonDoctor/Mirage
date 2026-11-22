@@ -3,6 +3,7 @@ import Foundation
 /// Headless checks, run as `Mirage --selftest <command> …`. Used to verify the core without the window.
 enum SelfTest {
     static func run() -> Never {
+        setvbuf(stdout, nil, _IOLBF, 0)      // show progress as it happens, even when output is redirected
         let args = Array(CommandLine.arguments.drop(while: { $0 != "--selftest" }).dropFirst())
         Task { @MainActor in
             let code = await dispatch(args)
