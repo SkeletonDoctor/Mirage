@@ -173,8 +173,12 @@ final class ChatEngine {
         done
         wait $child
         """
+        // A model's own code often finds its files by resolving its real location. In the Hugging Face
+        // cache every file is a link into a folder of hash-named blobs, so that lookup fails. Give such
+        // models a plain folder of hard links instead: real names, no extra disk space.
+        let modelPath = needsCustomCode ? Self.plainFolder(for: model).path : model.snapshot.path
         var args = ["-c", launcher, bin.appendingPathComponent("mlx_lm.server").path,
-                    "--model", model.snapshot.path, "--host", "127.0.0.1", "--port", "\(port)", "--log-level", "WARNING"]
+                    "--model", modelPath, "--host", "127.0.0.1", "--port", "\(port)", "--log-level", "WARNING"]
         // Only for models that need it, and only when the user has switched it on.
         if needsCustomCode { args.append("--trust-remote-code") }
         let repo = model.repo
@@ -243,6 +247,21 @@ final class ChatEngine {
         housekeeping?.invalidate(); housekeeping = nil
         state = .idle
         notice = reason
+    }
+
+    /// Builds (once) a folder beside the snapshot holding the same files as hard links under their real names.
+    private static func plainFolder(for model: InstalledModel) -> URL {
+        let fm = FileManager.default
+        let folder = Paths.repoDir(model.repo).appendingPathComponent("plain/\(model.snapshot.lastPathComponent)", isDirectory: true)
+        for relative in model.files {
+            let target = folder.appendingPathComponent(relative)
+            if fm.fileExists(atPath: target.path) { continue }
+            let source = model.snapshot.appendingPathComponent(relative).resolvingSymlinksInPath()
+            try? fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do { try fm.linkItem(at: source, to: target) }
+            catch { try? fm.copyItem(at: source, to: target) }       // different volume: fall back to a copy
+        }
+        return folder
     }
 
     /// Output of the most recent chat server run.
