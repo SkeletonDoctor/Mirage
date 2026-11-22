@@ -217,7 +217,8 @@ enum HFClient {
             }
             for await result in group {
                 switch result {
-                case .success(let models): for m in models where m.profile.isChat { merged[m.id] = m }
+                // Models tagged for the oMLX runtime need that app's own engine and fail to load here.
+                case .success(let models): for m in models where m.profile.isChat && !m.tags.contains(where: { $0.lowercased() == "omlx" }) { merged[m.id] = m }
                 case .failure(let e): if firstError == nil { firstError = e }
                 }
             }

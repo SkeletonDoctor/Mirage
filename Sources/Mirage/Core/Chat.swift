@@ -217,7 +217,8 @@ final class ChatEngine {
             let health = await ping()
             // The server answers 503 once its model thread has died; stop at once instead of waiting it out.
             if health == 503 || log.contains("generation thread died") {
-                let reason = log.contains("custom modu") && !AppSettings.shared.allowCustomCode ? ChatEngine.customCodeMessage : JobQueue.explain(log: log, status: 1)
+                let reason = log.contains("oMLX") ? "This model is built for the oMLX app and needs features Mirage's chat engine does not have, so it cannot run here. Pick a standard MLX model instead."
+                    : log.contains("custom modu") && !AppSettings.shared.allowCustomCode ? ChatEngine.customCodeMessage : JobQueue.explain(log: log, status: 1)
                 unload(reason: nil)
                 state = .failed(reason)
                 return false
