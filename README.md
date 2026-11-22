@@ -8,7 +8,7 @@ A native macOS app for generating images and video on your own Mac with MLX. Not
 
 - **Images:** text to image, image to image and instruction-based editing with FLUX, Z-Image, Qwen Image, Krea and other models supported by [mflux](https://github.com/filipstrand/mflux).
 - **Video:** LTX-2.3 / LTX-2.5 through [ltx-2-mlx](https://github.com/dgrauet/ltx-2-mlx) and Wan 2.x through [mlx-video](https://github.com/Blaizzy/mlx-video), from text, an image or an audio track.
-- **Chat:** talk to local language models in a Chat tab. It lists only unlocked models (those labelled abliterated or uncensored on Hugging Face), keeps one loaded between messages and frees it when idle or when a generation needs the memory.
+- **Chat:** talk to local language models in a Chat tab. It lists only unlocked models (those labelled abliterated or uncensored on Hugging Face), shows the refusal rate each model's author states on its card and can sort and filter by it, keeps one loaded between messages and frees it when idle or when a generation needs the memory.
 - **Upscaling:** enlarge any image up to 4× with the optional SeedVR2 upscaler, with adjustable scale, softness, precision and tile size.
 - **Fits the Mac it runs on:** reads the machine's memory, recommends the model variant that fits (4-bit on small Macs, full precision on large ones), switches on low-memory modes automatically and shows what each generation will need before it starts. Every limit can be raised by hand.
 - **Hugging Face browser:** live search of MLX image and video models, per-file selection, pause and resume, and a choice of where models are stored.
