@@ -74,11 +74,28 @@ final class DownloadManager {
         task.activeDownloader?.cancel()
         task.state = .paused
         task.speed = 0
+        ModelStore.shared.markPaused(repo: task.repo, true)
     }
 
     func resume(_ task: DownloadTask) {
         guard !task.state.isActive, task.state != .completed else { return }
+        ModelStore.shared.markPaused(repo: task.repo, false)
         run(task)
+    }
+
+    /// Picks up downloads that were cut short when the app last closed: those that were running carry on
+    /// by themselves, and those the user had paused come back paused.
+    func restoreInterrupted() {
+        for item in ModelStore.shared.interruptedDownloads() where task(for: item.repo) == nil {
+            if item.paused {
+                let parts = [DownloadPart(repo: item.repo)] + item.companions.map { DownloadPart(repo: $0) }
+                let task = DownloadTask(repo: item.repo, title: item.title, parts: parts, tags: item.tags, library: item.library)
+                task.state = .paused
+                tasks.append(task)
+            } else {
+                start(repo: item.repo, title: item.title, companions: item.companions, tags: item.tags, library: item.library)
+            }
+        }
     }
 
     /// Cancels a download and deletes what it had fetched so far.

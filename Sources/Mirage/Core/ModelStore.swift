@@ -32,6 +32,18 @@ private struct RegistryEntry: Codable {
     var tags: [String]
     var library: String?
     var complete: Bool
+    /// True when the user paused the download themselves. Optional so older registry files still load.
+    var paused: Bool?
+}
+
+/// A download that was cut short by quitting or a crash.
+struct InterruptedDownload {
+    let repo: String
+    let title: String
+    let companions: [String]
+    let tags: [String]
+    let library: String?
+    let paused: Bool
 }
 
 /// Tracks installed models: those downloaded here plus any compatible repo already in the Hugging Face cache.
@@ -70,6 +82,23 @@ final class ModelStore {
         if registry[repo]?.complete == true, isInstalled(repo) { return }
         registry[repo] = RegistryEntry(title: title, companions: companions, tags: tags, library: library, complete: false)
         saveRegistry()
+    }
+
+    /// Remembers whether the user paused a download, so a relaunch does not restart it against their wishes.
+    func markPaused(repo: String, _ paused: Bool) {
+        guard var entry = registry[repo], !entry.complete, (entry.paused ?? false) != paused else { return }
+        entry.paused = paused
+        registry[repo] = entry
+        saveRegistry()
+    }
+
+    /// Downloads that were started here, never finished, and still have files on disk.
+    func interruptedDownloads() -> [InterruptedDownload] {
+        registry.compactMap { repo, entry in
+            guard !entry.complete, FileManager.default.fileExists(atPath: Paths.repoDir(repo).appendingPathComponent("blobs").path) else { return nil }
+            return InterruptedDownload(repo: repo, title: entry.title, companions: entry.companions, tags: entry.tags,
+                                       library: entry.library, paused: entry.paused ?? false)
+        }
     }
 
     /// Deletes a partly downloaded repo. Does nothing for a model that finished downloading.

@@ -271,6 +271,7 @@ final class AppState {
         async let models: Void = ModelStore.shared.refresh()
         _ = await (engines, models)
         pickDefaultModel()
+        DownloadManager.shared.restoreInterrupted()
     }
 
     func pickDefaultModel() {
