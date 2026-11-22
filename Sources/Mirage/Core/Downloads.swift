@@ -185,15 +185,19 @@ final class DownloadManager {
         // 2. Fetch what is missing, smallest files first so configs land early.
         let counter = ByteCounter()
         let ticker = Task { @MainActor in
-            var last = Date()
+            // Large files arrive as whole 8 MB parts, so bytes land in bursts. Averaging over the last
+            // ten seconds gives a steady speed and a believable time remaining on slow connections.
+            let started = Date()
+            var window: [(time: Date, bytes: Int64)] = []
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                try? await Task.sleep(nanoseconds: 500_000_000)
                 let n = counter.take()
                 let now = Date()
-                let dt = now.timeIntervalSince(last)
-                last = now
                 task.receivedBytes += n
-                if dt > 0 { task.speed = task.speed * 0.6 + (Double(n) / dt) * 0.4 }
+                window.append((now, n))
+                window.removeAll { now.timeIntervalSince($0.time) > 10 }
+                let span = min(10, max(1, now.timeIntervalSince(started)))
+                task.speed = Double(window.reduce(Int64(0)) { $0 + $1.bytes }) / span
             }
         }
         defer { ticker.cancel() }
