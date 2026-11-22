@@ -493,22 +493,80 @@ struct MarkdownText: View {
 
 // MARK: - Model browser
 
+enum ChatModelSort: String, CaseIterable, Identifiable {
+    case lowestRefusals = "Lowest refusal rate", downloads = "Most downloaded", trending = "Trending", updated = "Recently updated"
+    var id: String { rawValue }
+    var apiSort: HFSort {
+        switch self {
+        case .lowestRefusals, .downloads: return .downloads
+        case .trending: return .trending
+        case .updated: return .updated
+        }
+    }
+}
+
+/// How low a model's stated refusal rate must be to be listed.
+enum RefusalLimit: String, CaseIterable, Identifiable {
+    case any = "Any refusal rate", stated = "Stated rates only", ten = "10% or less", five = "5% or less", zero = "0% only"
+    var id: String { rawValue }
+    /// nil means no figure is required.
+    var ceiling: Double? {
+        switch self {
+        case .any: return nil
+        case .stated: return 1
+        case .ten: return 0.10
+        case .five: return 0.05
+        case .zero: return 0
+        }
+    }
+}
+
 @Observable @MainActor
 final class ChatModelSearch {
     var query = ""
-    var sort: HFSort = .downloads
-    var results: [HFModel] = []
-    var sizes: [String: Int64] = [:]
-    var loading = false
-    var error: String?
+    var sort: ChatModelSort = .lowestRefusals
+    var limit: RefusalLimit = .any
+    /// Hide models too large for this Mac's memory.
+    var fitsOnly = false
+    private(set) var results: [HFModel] = []
+    private(set) var sizes: [String: Int64] = [:]
+    /// Refusal figures read from model cards; a repo is in `checked` once its card has been read.
+    private(set) var refusals: [String: RefusalReport] = [:]
+    private(set) var checked: Set<String> = []
+    private(set) var loading = false
+    private(set) var readingCards = false
+    private(set) var error: String?
+    private var cardTask: Task<Void, Never>?
+
+    /// Results after the refusal filter, in the chosen order.
+    var visible: [HFModel] {
+        var list = results
+        if fitsOnly {
+            let limitGB = AppSettings.shared.memoryLimitGB
+            list = list.filter { m in sizes[m.id].map { MemoryPlanner.chatFit(weightBytes: $0, memoryLimitGB: limitGB) != .tooLarge } ?? false }
+        }
+        if let ceiling = limit.ceiling {
+            list = list.filter { m in refusals[m.id].map { $0.rate <= ceiling + 0.0001 } ?? false }
+        }
+        guard sort == .lowestRefusals else { return list }
+        return list.sorted { a, b in
+            switch (refusals[a.id], refusals[b.id]) {
+            case let (x?, y?): return x.rate != y.rate ? x.rate < y.rate : (a.downloads ?? 0) > (b.downloads ?? 0)
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return (a.downloads ?? 0) > (b.downloads ?? 0)
+            }
+        }
+    }
 
     func load() async {
         loading = true
         error = nil
         do {
-            let found = try await HFClient.searchUnlockedChat(query: query, sort: sort)
+            let found = try await HFClient.searchUnlockedChat(query: query, sort: sort.apiSort)
             if Task.isCancelled { return }
             results = found
+            readCards()
         } catch {
             if Task.isCancelled { return }
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -516,10 +574,61 @@ final class ChatModelSearch {
         loading = false
     }
 
+    /// Reads each listed model's card for a stated refusal rate, a few at a time.
+    private func readCards() {
+        cardTask?.cancel()
+        let pending = results.filter { !checked.contains($0.id) }
+        guard !pending.isEmpty else { readingCards = false; return }
+        readingCards = true
+        cardTask = Task { @MainActor in
+            await withTaskGroup(of: (String, RefusalReport?).self) { group in
+                var iterator = pending.makeIterator()
+                func addNext() {
+                    guard let m = iterator.next() else { return }
+                    group.addTask {
+                        await self.size(for: m.id)          // sizes are needed to filter by fit
+                        return (m.id, await HFClient.refusalReport(repo: m.id, tags: m.tags))
+                    }
+                }
+                for _ in 0..<6 { addNext() }
+                for await (id, report) in group {
+                    if Task.isCancelled { break }
+                    checked.insert(id)
+                    if let report { refusals[id] = report }
+                    addNext()
+                }
+            }
+            if !Task.isCancelled { readingCards = false }
+        }
+    }
+
     /// Looks up a repo's weight size the first time its row appears.
     func size(for repo: String) async {
         guard sizes[repo] == nil, let detail = try? await HFClient.detail(repo) else { return }
         sizes[repo] = (detail.siblings ?? []).filter { $0.rfilename.hasSuffix(".safetensors") }.reduce(0) { $0 + $1.bytes }
+    }
+}
+
+/// The refusal rate a model's author states on its card.
+struct RefusalBadge: View {
+    let report: RefusalReport?
+    let checked: Bool
+
+    var body: some View {
+        if let report {
+            let color: Color = report.rate <= 0.05 ? .green : report.rate <= 0.15 ? .orange : .red
+            Label("Refuses \(report.percentText)", systemImage: report.rate <= 0.0001 ? "checkmark.seal.fill" : "hand.raised")
+                .font(.caption.weight(.medium)).foregroundStyle(color).lineLimit(1).fixedSize()
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(color.opacity(0.14), in: Capsule())
+                .help("Stated by the model's author\(report.fromBase ? " on the card of the model this was converted from" : "") (\(report.figure)), not verified by Mirage:\n“\(report.snippet)”")
+        } else {
+            Text(checked ? "Rate not stated" : "Reading card…")
+                .font(.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(.primary.opacity(0.05), in: Capsule())
+                .help(checked ? "This model's card gives no measured refusal rate." : "")
+        }
     }
 }
 
@@ -542,11 +651,14 @@ struct ChatModelRow: View {
                 }
             }
             Spacer(minLength: 8)
+            RefusalBadge(report: search.refusals[model.id], checked: search.checked.contains(model.id))
             if let fit { FitBadge(fit: fit, compact: true) }
+            Button("Model Card", systemImage: "safari") { NSWorkspace.shared.open(HFClient.pageURL(model.id)) }
+                .buttonStyle(IconButtonStyle(size: 26)).help("Open this model's card on Hugging Face")
             DownloadControl(repo: model.id, title: model.id.split(separator: "/").last.map(String.init) ?? model.id,
                             tags: model.tags, library: model.libraryName,
                             blocked: fit == .tooLarge && !settings.unlockLimits)
-                .frame(width: 210)
+                .frame(width: 200)
         }
         .padding(.vertical, 4)
         .task { await search.size(for: model.id) }

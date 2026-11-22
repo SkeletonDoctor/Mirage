@@ -43,6 +43,20 @@ enum SelfTest {
             print("memory while loaded: \(Format.gb(ChatEngine.shared.memoryGB))")
             ChatEngine.shared.unload(reason: nil)
             return reply.isEmpty ? 1 : 0
+        case "refusals":
+            guard let found = try? await HFClient.searchUnlockedChat(query: args.dropFirst().joined(separator: " "), sort: .downloads) else { print("search failed"); return 1 }
+            var withFigure = 0
+            for m in found.prefix(45) {
+                let r = await HFClient.refusalReport(repo: m.id, tags: m.tags)
+                if let r {
+                    withFigure += 1
+                    print("\(r.percentText.padding(toLength: 6, withPad: " ", startingAt: 0)) \(r.figure.padding(toLength: 8, withPad: " ", startingAt: 0)) \(r.fromBase ? "base" : "own ") | \(m.id)\n         ↳ \(r.snippet.prefix(150))")
+                } else {
+                    print("  —                  | \(m.id)")
+                }
+            }
+            print("\(withFigure) of \(min(45, found.count)) have a stated figure")
+            return 0
         case "relocate":
             await ModelStore.shared.refresh()
             let target = args.count > 1 && args[1] != "default" ? URL(fileURLWithPath: args[1], isDirectory: true) : Paths.defaultHFHub

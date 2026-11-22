@@ -542,6 +542,7 @@ struct ChatModelsView: View {
     var body: some View {
         let installed = store.chatModels
         let installedIDs = Set(installed.map(\.repo))
+        let listed = search.visible.filter { !installedIDs.contains($0.id) }
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 HStack(spacing: 6) {
@@ -551,8 +552,16 @@ struct ChatModelsView: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 7)
                 .glassEffect(.regular, in: Capsule())
+                Toggle("Fits this Mac", isOn: $search.fitsOnly)
+                    .toggleStyle(.switch).controlSize(.small)
+                    .help("Hide models that need more memory than this Mac can give them")
+                Picker("Refusal rate", selection: $search.limit) {
+                    ForEach(RefusalLimit.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .labelsHidden().fixedSize()
+                .help("List only models whose card states a refusal rate this low")
                 Picker("Sort", selection: $search.sort) {
-                    ForEach(HFSort.allCases) { Text($0.title).tag($0) }
+                    ForEach(ChatModelSort.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .labelsHidden().fixedSize()
                 Button { Task { await search.load() } } label: { Image(systemName: "arrow.clockwise") }
@@ -574,18 +583,24 @@ struct ChatModelsView: View {
                         }
                     }
                     Section {
-                        ForEach(search.results.filter { !installedIDs.contains($0.id) }) { model in
+                        ForEach(listed) { model in
                             ChatModelRow(model: model, search: search).listRowBackground(Color.clear)
                         }
-                        if search.results.isEmpty && !search.loading {
-                            Text("No matching models. Try a different search.").foregroundStyle(.secondary)
-                                .listRowBackground(Color.clear)
+                        if listed.isEmpty && !search.loading {
+                            Text(search.readingCards ? "Reading model cards for refusal rates…"
+                                 : search.limit == .any && !search.fitsOnly ? "No matching models. Try a different search."
+                                 : "No listed model passes these filters. Loosen the refusal or size filter, or try a different search.")
+                                .foregroundStyle(.secondary).listRowBackground(Color.clear)
                         }
                     } header: {
-                        Text("Unlocked models on Hugging Face")
+                        HStack(spacing: 6) {
+                            Text("Unlocked models on Hugging Face")
+                            if search.readingCards { ProgressView().controlSize(.mini) }
+                        }
                     } footer: {
-                        Text("Only MLX language models labelled abliterated, uncensored or similar are listed. Sizes and fit are for this \(SystemInfo.current.chip) with \(Format.gb(SystemInfo.current.totalGB)).")
+                        Text("Only MLX language models labelled abliterated, uncensored or similar are listed. “Refuses” is the rate the model's author measured and wrote on its card (hover for the wording); Mirage has not tested it, and many cards give no figure. Sizes and fit are for this \(SystemInfo.current.chip) with \(Format.gb(SystemInfo.current.totalGB)).")
                     }
+                    .animation(.snappy(duration: 0.3), value: listed.map(\.id))
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)

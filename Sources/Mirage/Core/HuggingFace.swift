@@ -240,6 +240,26 @@ enum HFClient {
         return try JSONDecoder().decode(HFModel.self, from: data)
     }
 
+    /// The text of a repo's model card, or nil if it has none.
+    static func readme(_ repo: String) async -> String? {
+        guard let url = URL(string: "\(host)/\(repo)/raw/main/README.md"),
+              let (data, response) = try? await session.data(for: request(url)),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return String(decoding: data.prefix(200_000), as: UTF8.self)
+    }
+
+    /// The refusal rate stated on a model's card, falling back to the card of the model it was converted from.
+    static func refusalReport(repo: String, tags: [String]) async -> RefusalReport? {
+        if let card = await readme(repo), let report = RefusalParser.parse(card) { return report }
+        for base in RefusalParser.baseModels(tags: tags).prefix(2) {
+            if let card = await readme(base), var report = RefusalParser.parse(card) {
+                report.fromBase = true
+                return report
+            }
+        }
+        return nil
+    }
+
     /// Returns the account name for the saved token.
     static func whoami() async throws -> String {
         let data = try await get(URL(string: "\(host)/api/whoami-v2")!)
