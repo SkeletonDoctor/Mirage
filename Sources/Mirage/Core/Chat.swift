@@ -151,6 +151,8 @@ final class ChatEngine {
             return false
         }
 
+        let header = "\(Date()) loading \(model.repo)\(needsCustomCode ? " with custom code allowed" : "")\n"
+        try? Data(header.utf8).write(to: ChatEngine.logURL)
         guard let free = Self.freePort() else { state = .failed("Could not find a free local port."); return false }
         port = free
         state = .loading("Loading \(model.title)")
@@ -181,6 +183,10 @@ final class ChatEngine {
                 Task { @MainActor in
                     guard let self else { return }
                     self.log += text
+                    // Keep a copy on disk so a failed load can be diagnosed after the fact.
+                    if let handle = try? FileHandle(forWritingTo: ChatEngine.logURL) {
+                        _ = try? handle.seekToEnd(); try? handle.write(contentsOf: Data(text.utf8)); try? handle.close()
+                    }
                     if self.log.count > 20_000 { self.log = String(self.log.suffix(12_000)) }
                 }
             }
@@ -199,7 +205,8 @@ final class ChatEngine {
         }
 
         // Wait for the server to answer; loading a large model can take a while.
-        let deadline = Date().addingTimeInterval(240)
+        // Big models take longer, more so when memory is tight: allow a minute per GB, at least four minutes.
+        let deadline = Date().addingTimeInterval(max(240, model.footprint.residentGB * 60))
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard self.runner === runner else { return false }       // failed or was unloaded meanwhile
@@ -221,7 +228,7 @@ final class ChatEngine {
             }
         }
         unload(reason: nil)
-        state = .failed("The model took too long to load.")
+        state = .failed("The model took too long to load. Its output is saved in chat-server.log in Mirage's support folder.")
         return false
     }
 
@@ -237,6 +244,9 @@ final class ChatEngine {
         state = .idle
         notice = reason
     }
+
+    /// Output of the most recent chat server run.
+    static var logURL: URL { Paths.appSupport.appendingPathComponent("chat-server.log") }
 
     static let customCodeMessage = "This model only runs with its own custom program code, which Mirage does not run unless you allow it. Pick another model, or turn on “Allow models to run their own code” under This Mac → Chat."
 
