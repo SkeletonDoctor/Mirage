@@ -10,6 +10,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var date = Date()
     /// Tokens per second for an assistant reply, once it has finished.
     var speed: Double?
+    /// True when the reply was cut off by the length limit rather than ending on its own.
+    var hitLimit: Bool?
 }
 
 struct Conversation: Codable, Identifiable, Equatable {
@@ -292,7 +294,7 @@ final class ChatEngine {
         }
     }
 
-    struct Piece { var text = ""; var thinking = "" }
+    struct Piece { var text = ""; var thinking = ""; var finish: String? = nil }
 
     /// Streams a reply. Each element is the new text since the previous one.
     func reply(to messages: [ChatMessage], system: String, temperature: Double, maxTokens: Int) -> AsyncThrowingStream<Piece, Error> {
@@ -324,12 +326,14 @@ final class ChatEngine {
                         if json == "[DONE]" { break }
                         guard let data = json.data(using: .utf8),
                               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                              let choice = (object["choices"] as? [[String: Any]])?.first,
-                              let delta = choice["delta"] as? [String: Any] else { continue }
+                              let choice = (object["choices"] as? [[String: Any]])?.first else { continue }
                         var piece = Piece()
+                        // "length" means the reply ran into the token limit; "stop" means it ended by itself.
+                        piece.finish = choice["finish_reason"] as? String
+                        let delta = (choice["delta"] as? [String: Any]) ?? [:]
                         if let content = delta["content"] as? String { piece.text = content }
                         if let reasoning = (delta["reasoning"] as? String) ?? (delta["reasoning_content"] as? String) { piece.thinking = reasoning }
-                        if !piece.text.isEmpty || !piece.thinking.isEmpty { continuation.yield(piece) }
+                        if !piece.text.isEmpty || !piece.thinking.isEmpty || piece.finish != nil { continuation.yield(piece) }
                     }
                     continuation.finish()
                 } catch {

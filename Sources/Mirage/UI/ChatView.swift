@@ -44,6 +44,13 @@ final class ChatController {
         task?.cancel()
     }
 
+    /// Asks the model to carry on after a reply that ran into the length limit.
+    func continueReply() {
+        guard task == nil else { return }
+        draft = "Continue exactly where you stopped."
+        send()
+    }
+
     private func respond(in id: UUID, model: InstalledModel) {
         let store = ChatStore.shared
         let settings = AppSettings.shared
@@ -59,6 +66,7 @@ final class ChatController {
             streamingID = reply.id
 
             var text = "", thinking = "", pieces = 0
+            var finish: String?
             var lastFlush = Date.distantPast
             let started = Date()
             @MainActor func flush(final: Bool) {
@@ -67,6 +75,7 @@ final class ChatController {
                     c.messages[i].text = text
                     c.messages[i].thinking = thinking.isEmpty ? nil : thinking
                     if final {
+                        c.messages[i].hitLimit = finish == "length" ? true : nil
                         let elapsed = Date().timeIntervalSince(started)
                         c.messages[i].speed = elapsed > 0.5 ? Double(pieces) / elapsed : nil
                         c.updated = Date()
@@ -80,7 +89,8 @@ final class ChatController {
                     if Task.isCancelled { break }
                     text += piece.text
                     thinking += piece.thinking
-                    pieces += 1
+                    if let f = piece.finish { finish = f }
+                    if !piece.text.isEmpty || !piece.thinking.isEmpty { pieces += 1 }
                     // Redraw about twelve times a second at most, however fast the words arrive.
                     if Date().timeIntervalSince(lastFlush) > 0.08 { flush(final: false); lastFlush = Date() }
                 }
@@ -219,7 +229,7 @@ struct ChatSidebar: View {
                     VStack(alignment: .leading, spacing: 10) {
                         LabeledSlider(title: "Creativity", value: $settings.chatTemperature, range: 0...1.5, step: 0.05,
                                       display: String(format: "%.2f", settings.chatTemperature))
-                        LabeledSlider(title: "Longest reply", value: $settings.chatMaxTokens, range: 256...8192, step: 256,
+                        LabeledSlider(title: "Longest reply", value: $settings.chatMaxTokens, range: 256...16384, step: 256,
                                       display: "\(Int(settings.chatMaxTokens)) tokens")
                         Text("Instructions for every chat").font(.callout)
                         TextEditor(text: $settings.chatSystemPrompt)
@@ -416,8 +426,21 @@ struct MessageRow: View {
                 }
                 if !message.text.isEmpty {
                     MarkdownText(text: message.text)
+                } else if !streaming, message.hitLimit == true {
+                    Text("The model used the whole reply length on its reasoning and never got to an answer.")
+                        .font(.callout).foregroundStyle(.secondary)
                 } else if streaming {
                     ProgressView().controlSize(.small)
+                }
+                if !streaming, message.hitLimit == true {
+                    HStack(spacing: 8) {
+                        Label("Stopped at the reply length limit (\(Int(AppSettings.shared.chatMaxTokens)) tokens).", systemImage: "scissors")
+                            .font(.caption).foregroundStyle(.orange)
+                        if isLast {
+                            Button("Continue") { ChatController.shared.continueReply() }.buttonStyle(.softSmall)
+                        }
+                        Text("Raise “Longest reply” under Settings to allow more.").font(.caption).foregroundStyle(.tertiary)
+                    }
                 }
                 HStack(spacing: 8) {
                     if !streaming {

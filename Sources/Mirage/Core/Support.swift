@@ -115,7 +115,8 @@ final class AppSettings {
         lastModelRepo = d.string(forKey: "lastModelRepo") ?? ""
         lastChatRepo = d.string(forKey: "lastChatRepo") ?? ""
         chatTemperature = d.object(forKey: "chatTemperature") as? Double ?? 0.7
-        chatMaxTokens = d.object(forKey: "chatMaxTokens") as? Double ?? 1024
+        // Reasoning models spend part of this budget thinking before they answer, so the default is generous.
+        chatMaxTokens = d.object(forKey: "chatMaxTokens") as? Double ?? 4096
         chatSystemPrompt = d.string(forKey: "chatSystemPrompt") ?? ""
         recentPrompts = d.stringArray(forKey: "recentPrompts") ?? []
         upscaleScale = d.object(forKey: "upscaleScale") as? Double ?? 2
